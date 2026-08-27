@@ -15,7 +15,7 @@ export default function Home() {
     <main className="flex min-h-screen items-center justify-center bg-brand-light text-brand-dark">
       <div className="text-center">
         <div className="mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-full bg-brand text-2xl font-bold text-white">
-          আশ
+          FP
         </div>
         <p className="font-bold">{L.appName}</p>
         <p className="text-sm text-gray-500">{L.common.loading}</p>

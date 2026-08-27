@@ -2,6 +2,7 @@
 
 // অ্যাপের ডেটা স্তর — সম্পূর্ণ local (IndexedDB via Dexie)।
 // সব ব্যবসায়িক নিয়ম ও আর্থিক হিসাব এখানে transaction-এ enforce হয় (Section ১৮)।
+import type { Table } from 'dexie';
 import {
   db, uuid, nowISO, todayISO, localDateOf, newClientTxnId, newTxnNo, audit, ensureSeeded, getSettings,
 } from '@/lib/db/local';
@@ -31,6 +32,29 @@ function sameMedicineKey(
   return key(a) === key(b);
 }
 
+/**
+ * মুছে ফেলা রেকর্ড সত্যিই মোছা হয় না — চিহ্ন দেওয়া হয়।
+ * এতে মুছে ফেলার খবরটিও সার্ভার হয়ে অন্য ডিভাইসে পৌঁছাতে পারে।
+ */
+function markDeleted<T extends { id: string }>(
+  table: { update: (id: string, changes: Record<string, unknown>) => Promise<number> },
+  id: string,
+): Promise<number> {
+  return table.update(id, { deleted_at: nowISO() });
+}
+
+/** মুছে ফেলা চিহ্ন নেই এমন রেকর্ড। */
+function isLive(row: { deleted_at?: string | null }): boolean {
+  return !row.deleted_at;
+}
+
+/** টেবিলের সব জীবিত (মুছে ফেলা নয়) রেকর্ড। */
+async function liveArray<T extends { deleted_at?: string | null }>(
+  table: Table<T, string>,
+): Promise<T[]> {
+  return (await table.toArray()).filter(isLive);
+}
+
 /** পুরোনো রেকর্ডে status নেই — সেগুলো completed ধরা হয়। */
 function isActive(row: { status?: string }): boolean {
   return (row.status ?? 'completed') !== 'cancelled';
@@ -43,8 +67,8 @@ export async function fetchStockRows(): Promise<StockRow[]> {
   await ensureSeeded();
   const d = db();
   const [meds, batches, settings] = await Promise.all([
-    d.medicines.toArray(),
-    d.batches.toArray(),
+    liveArray(d.medicines),
+    liveArray(d.batches),
     getSettings(),
   ]);
   const medMap = new Map(meds.map((m) => [m.id, m]));
@@ -90,20 +114,20 @@ function expiryTag(expiry: string | null | undefined, today: Date): string | nul
 // ============================================================
 export async function fetchMedicines(): Promise<Medicine[]> {
   await ensureSeeded();
-  const meds = await db().medicines.filter((m) => m.is_active).toArray();
+  const meds = await db().medicines.filter((m) => isLive(m) && m.is_active).toArray();
   meds.sort((a, b) => a.name.localeCompare(b.name));
   return meds;
 }
 
 export async function fetchCustomers(): Promise<Customer[]> {
-  const cs = await db().customers.toArray();
+  const cs = await liveArray(db().customers);
   cs.sort((a, b) => a.name.localeCompare(b.name));
   return cs;
 }
 
 export async function fetchExpenseCategories(): Promise<ExpenseCategory[]> {
   await ensureSeeded();
-  const cats = await db().expense_categories.toArray();
+  const cats = await liveArray(db().expense_categories);
   cats.sort((a, b) => a.sort_order - b.sort_order);
   return cats;
 }
@@ -155,7 +179,7 @@ export async function fetchDashboardStats(): Promise<DashboardStats> {
     d.sales.filter((s) => s.status === 'completed' && dateOf(s.sale_date) === today).toArray(),
     d.due_payments.filter((p) => p.status === 'completed' && p.pay_date === today).toArray(),
     d.expenses.filter((e) => e.status === 'completed' && e.expense_date === today).toArray(),
-    d.customers.toArray(),
+    liveArray(d.customers),
     fetchStockRows(),
   ]);
   const saleIds = new Set(sales.map((s) => s.id));
@@ -189,7 +213,7 @@ export async function fetchDashboardStats(): Promise<DashboardStats> {
 // ============================================================
 async function recomputeCustomerDue(customerId: string): Promise<void> {
   const d = db();
-  const ledger = await d.customer_ledger.where('customer_id').equals(customerId).toArray();
+  const ledger = (await d.customer_ledger.where('customer_id').equals(customerId).toArray()).filter(isLive);
   const due = sum(ledger.map((l) => l.amount_paisa));
   const c = await d.customers.get(customerId);
   if (c) {
@@ -237,14 +261,14 @@ export async function upsertMedicine(input: {
 /** সক্রিয় ও বন্ধ — সব ওষুধ (ব্যবস্থাপনা পেজের জন্য)। */
 export async function fetchAllMedicines(): Promise<Medicine[]> {
   await ensureSeeded();
-  const meds = await db().medicines.toArray();
+  const meds = await liveArray(db().medicines);
   meds.sort((a, b) => a.name.localeCompare(b.name));
   return meds;
 }
 
 /** এক ওষুধের সব batch, মেয়াদ অনুসারে (আগে শেষ হবে যেটি, আগে)। */
 export async function fetchBatchesForMedicine(medicineId: string): Promise<MedicineBatch[]> {
-  const bs = await db().batches.where('medicine_id').equals(medicineId).toArray();
+  const bs = (await db().batches.where('medicine_id').equals(medicineId).toArray()).filter(isLive);
   bs.sort((a, b) => (a.expiry_date ?? '9999-12-31').localeCompare(b.expiry_date ?? '9999-12-31'));
   return bs;
 }
@@ -281,7 +305,7 @@ export async function setMedicineActive(id: string, active: boolean): Promise<{ 
   const d = db();
   const cur = await d.medicines.get(id);
   if (!cur) throw new Error('ওষুধ পাওয়া যায়নি');
-  const batches = await d.batches.where('medicine_id').equals(id).toArray();
+  const batches = (await d.batches.where('medicine_id').equals(id).toArray()).filter(isLive);
   const remaining = sum(batches.map((b) => b.qty_in_stock));
   await d.medicines.put({ ...cur, is_active: active });
   await audit('medicine', id, active ? 'activate' : 'deactivate',
@@ -647,7 +671,7 @@ export interface CashSummary {
 export async function fetchCashSummary(date: string): Promise<CashSummary> {
   const d = db();
   const [session, sales, payments, expenses, entries] = await Promise.all([
-    d.cash_sessions.where('session_date').equals(date).first(),
+    d.cash_sessions.where('session_date').equals(date).filter(isLive).first(),
     d.sales.filter((s) => s.status === 'completed' && dateOf(s.sale_date) === date).toArray(),
     d.due_payments.filter((p) => p.status === 'completed' && p.method === 'cash' && p.pay_date === date).toArray(),
     d.expenses.filter((e) => e.status === 'completed' && e.payment_source === 'cash' && e.expense_date === date).toArray(),
@@ -670,7 +694,7 @@ export async function saveCashSession(input: {
   date: string; opening_paisa: number; actual_paisa: number | null; note?: string | null;
 }) {
   const d = db();
-  const existing = await d.cash_sessions.where('session_date').equals(input.date).first();
+  const existing = await d.cash_sessions.where('session_date').equals(input.date).filter(isLive).first();
   const row = {
     id: existing?.id ?? uuid(), session_date: input.date,
     opening_cash_paisa: input.opening_paisa, actual_closing_paisa: input.actual_paisa,
@@ -696,7 +720,7 @@ export interface ReturnTotals {
 /** নির্দিষ্ট সময়ের সক্রিয় (বাতিল নয়) রিটার্নের হিসাব। */
 async function returnTotals(inRange: (d: string) => boolean): Promise<ReturnTotals> {
   const d = db();
-  const rets = (await d.sale_returns.toArray()).filter((r) => isActive(r) && inRange(r.return_date));
+  const rets = (await d.sale_returns.toArray()).filter((r) => isLive(r) && isActive(r) && inRange(r.return_date));
   if (rets.length === 0) return { value_paisa: 0, restocked_cost_paisa: 0, refund_paisa: 0 };
   const retIds = new Set(rets.map((r) => r.id));
   const items = (await d.sale_return_items.toArray()).filter((i) => retIds.has(i.return_id));
@@ -774,8 +798,8 @@ export async function fetchMonthlyReport(year: number, month: number): Promise<M
     d.customer_ledger.filter((l) => l.entry_type === 'sale_due' && inRange(dateOf(l.entry_date))).toArray(),
     returnTotals(inRange),
     d.due_payments.filter((p) => p.status === 'completed' && inRange(p.pay_date)).toArray(),
-    d.customers.toArray(),
-    d.expense_categories.toArray(),
+    liveArray(d.customers),
+    liveArray(d.expense_categories),
   ]);
   const catMap = new Map(cats.map((c) => [c.id, c.bn_name]));
   const byCat: Record<string, number> = {};
@@ -835,7 +859,7 @@ const LEDGER_LABEL: Record<string, string> = {
 
 /** এক পাওনাদারের সম্পূর্ণ খতিয়ান, নতুন এন্ট্রি আগে। */
 export async function fetchCustomerLedger(customerId: string): Promise<LedgerRow[]> {
-  const rows = await db().customer_ledger.where('customer_id').equals(customerId).toArray();
+  const rows = (await db().customer_ledger.where('customer_id').equals(customerId).toArray()).filter(isLive);
   rows.sort((a, b) => b.entry_date.localeCompare(a.entry_date));
   return rows.map((r) => ({ ...r, label: LEDGER_LABEL[r.entry_type] ?? r.entry_type }));
 }
@@ -872,7 +896,7 @@ export async function setCustomerOpeningDue(customerId: string, amountPaisa: num
       .first();
     const before = existing?.amount_paisa ?? 0;
     if (existing) {
-      if (amount === 0) await d.customer_ledger.delete(existing.id);
+      if (amount === 0) await markDeleted(d.customer_ledger, existing.id);
       else await d.customer_ledger.put({ ...existing, amount_paisa: amount });
     } else if (amount > 0) {
       await d.customer_ledger.add({
@@ -898,11 +922,11 @@ export async function deleteCustomer(id: string): Promise<void> {
     if (saleCount > 0) throw new Error('এই পাওনাদারের বিক্রয় আছে, মুছে ফেলা যাবে না');
     const payCount = await d.due_payments.where('customer_id').equals(id).count();
     if (payCount > 0) throw new Error('এই পাওনাদারের আদায়ের রেকর্ড আছে, মুছে ফেলা যাবে না');
-    const ledger = await d.customer_ledger.where('customer_id').equals(id).toArray();
+    const ledger = (await d.customer_ledger.where('customer_id').equals(id).toArray()).filter(isLive);
     const other = ledger.filter((l) => l.entry_type !== 'opening');
     if (other.length > 0) throw new Error('এই পাওনাদারের খতিয়ান আছে, মুছে ফেলা যাবে না');
-    for (const l of ledger) await d.customer_ledger.delete(l.id);
-    await d.customers.delete(id);
+    for (const l of ledger) await markDeleted(d.customer_ledger, l.id);
+    await markDeleted(d.customers, id);
     await audit('customer', id, 'delete', null, c);
   });
 }
@@ -923,7 +947,7 @@ export async function fetchSalesHistory(
   limit = 50, includeCancelled = true,
 ): Promise<SaleHistoryRow[]> {
   const d = db();
-  const [sales, customers] = await Promise.all([d.sales.toArray(), d.customers.toArray()]);
+  const [sales, customers] = await Promise.all([liveArray(d.sales), liveArray(d.customers)]);
   const nameOf = new Map(customers.map((c) => [c.id, c.name]));
   const rows = sales.filter((s) => includeCancelled || s.status === 'completed');
   rows.sort((a, b) => b.sale_date.localeCompare(a.sale_date));
@@ -987,7 +1011,7 @@ export interface DuePaymentRow extends DuePayment {
 
 export async function fetchRecentDuePayments(limit = 50): Promise<DuePaymentRow[]> {
   const d = db();
-  const [pays, customers] = await Promise.all([d.due_payments.toArray(), d.customers.toArray()]);
+  const [pays, customers] = await Promise.all([liveArray(d.due_payments), liveArray(d.customers)]);
   const nameOf = new Map(customers.map((c) => [c.id, c.name]));
   pays.sort((a, b) => b.pay_date.localeCompare(a.pay_date));
   return pays.slice(0, limit).map((p) => ({ ...p, customer_name: nameOf.get(p.customer_id) ?? null }));
@@ -1026,7 +1050,7 @@ export async function cancelDuePayment(paymentId: string, reason: string): Promi
 // ============================================================
 
 export async function fetchExpenses(limit = 50): Promise<Expense[]> {
-  const all = await db().expenses.toArray();
+  const all = await liveArray(db().expenses);
   all.sort((a, b) => b.expense_date.localeCompare(a.expense_date));
   return all.slice(0, limit);
 }
@@ -1065,7 +1089,7 @@ export async function addExpenseCategory(input: { bn_name: string; is_recurring?
   const d = db();
   const bn = input.bn_name.trim();
   if (!bn) throw new Error('ক্যাটাগরির নাম দিন');
-  const all = await d.expense_categories.toArray();
+  const all = await liveArray(d.expense_categories);
   if (all.some((c) => c.bn_name.trim() === bn)) throw new Error('এই নামে ক্যাটাগরি আছে');
   const maxSort = all.reduce((a, c) => Math.max(a, c.sort_order), 0);
   const cat: ExpenseCategory = {
@@ -1086,7 +1110,7 @@ export async function updateExpenseCategory(id: string, patch: { bn_name?: strin
   if (!cur) throw new Error('ক্যাটাগরি পাওয়া যায়নি');
   const bn = (patch.bn_name ?? cur.bn_name).trim();
   if (!bn) throw new Error('ক্যাটাগরির নাম দিন');
-  const all = await d.expense_categories.toArray();
+  const all = await liveArray(d.expense_categories);
   if (all.some((c) => c.id !== id && c.bn_name.trim() === bn)) throw new Error('এই নামে ক্যাটাগরি আছে');
   await d.expense_categories.put({ ...cur, ...patch, bn_name: bn });
   await audit('expense_category', id, 'update', { ...cur, ...patch, bn_name: bn }, cur);
@@ -1099,7 +1123,7 @@ export async function deleteExpenseCategory(id: string): Promise<void> {
   if (!cur) throw new Error('ক্যাটাগরি পাওয়া যায়নি');
   const used = await d.expenses.where('category_id').equals(id).count();
   if (used > 0) throw new Error('এই ক্যাটাগরিতে খরচ আছে, মুছে ফেলা যাবে না');
-  await d.expense_categories.delete(id);
+  await markDeleted(d.expense_categories, id);
   await audit('expense_category', id, 'delete', null, cur);
 }
 
@@ -1336,7 +1360,7 @@ export async function deleteBatch(batchId: string): Promise<void> {
       if (adj > 0) throw new Error('এই batch-এ সমন্বয় আছে, মুছে ফেলা যাবে না');
       const ret = await d.sale_return_items.where('batch_id').equals(batchId).count();
       if (ret > 0) throw new Error('এই batch-এ রিটার্ন আছে, মুছে ফেলা যাবে না');
-      await d.batches.delete(batchId);
+      await markDeleted(d.batches, batchId);
       await audit('batch', batchId, 'delete', null, cur);
     });
 }
@@ -1351,7 +1375,7 @@ export async function deleteMedicine(id: string): Promise<void> {
     if (sold > 0) throw new Error('এই ওষুধের বিক্রয় আছে, মুছে ফেলা যাবে না — বন্ধ করুন');
     const batches = await d.batches.where('medicine_id').equals(id).count();
     if (batches > 0) throw new Error('এই ওষুধের batch আছে, আগে batch মুছুন অথবা ওষুধ বন্ধ করুন');
-    await d.medicines.delete(id);
+    await markDeleted(d.medicines, id);
     await audit('medicine', id, 'delete', null, cur);
   });
 }
@@ -1363,7 +1387,7 @@ export async function deleteCashSession(date: string): Promise<void> {
   const d = db();
   const cur = await d.cash_sessions.where('session_date').equals(date).first();
   if (!cur) throw new Error('এই দিনের ক্যাশ হিসাব নেই');
-  await d.cash_sessions.delete(cur.id);
+  await markDeleted(d.cash_sessions, cur.id);
   await audit('cash_session', cur.id, 'delete', null, cur);
 }
 

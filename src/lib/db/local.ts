@@ -52,7 +52,78 @@ export class LocalDB extends Dexie {
       sale_return_items: 'id, return_id, sale_item_id, batch_id',
       audit_logs: 'id, entity, created_at',
     });
+
+    // v2 — বহু-ফার্মেসি ও সিঙ্কের প্রস্তুতি।
+    // পুরোনো ডেটা অক্ষত থাকে; শুধু নতুন index যোগ হয়।
+    this.version(2).stores({
+      settings: 'id',
+      medicines: 'id, name, generic_name, company, type, is_active, updated_at, deleted_at',
+      batches: 'id, medicine_id, expiry_date, qty_in_stock, updated_at, deleted_at',
+      stock_entries: 'id, batch_id, entry_date, client_txn_id, updated_at, deleted_at',
+      customers: 'id, name, phone, village, current_due_paisa, updated_at, deleted_at',
+      customer_ledger: 'id, customer_id, entry_date, updated_at, deleted_at',
+      sales: 'id, txn_no, sale_date, customer_id, status, client_txn_id, updated_at, deleted_at',
+      sale_items: 'id, sale_id, medicine_id, batch_id, updated_at, deleted_at',
+      due_payments: 'id, customer_id, pay_date, method, status, client_txn_id, updated_at, deleted_at',
+      expense_categories: 'id, name, sort_order, updated_at, deleted_at',
+      expenses: 'id, category_id, expense_date, payment_source, status, client_txn_id, updated_at, deleted_at',
+      cash_sessions: 'id, session_date, updated_at, deleted_at',
+      stock_adjustments: 'id, batch_id, adjusted_at, client_txn_id, updated_at, deleted_at',
+      sale_returns: 'id, sale_id, return_date, client_txn_id, updated_at, deleted_at',
+      sale_return_items: 'id, return_id, sale_item_id, batch_id, updated_at, deleted_at',
+      audit_logs: 'id, entity, created_at, updated_at',
+    });
+
+    attachSyncHooks(this);
   }
+}
+
+/** সিঙ্কের ফিল্ড বসে যেসব টেবিলে (settings ছাড়া বাকি সব)। */
+const SYNCED_TABLES = [
+  'medicines', 'batches', 'stock_entries', 'customers', 'customer_ledger',
+  'sales', 'sale_items', 'due_payments', 'expense_categories', 'expenses',
+  'cash_sessions', 'stock_adjustments', 'sale_returns', 'sale_return_items',
+] as const;
+
+/**
+ * প্রতিটি লেখায় pharmacy_id ও updated_at নিজে থেকেই বসে যায়।
+ * hook শুধু লেখা বস্তুটি বদলায়, আলাদা কোনো টেবিলে লেখে না —
+ * তাই বিদ্যমান transaction-গুলোর scope বদলাতে হয় না।
+ */
+function attachSyncHooks(d: LocalDB) {
+  for (const name of SYNCED_TABLES) {
+    const table = (d as unknown as Record<string, Table<Record<string, unknown>, string>>)[name];
+    if (!table) continue;
+    table.hook('creating', (_pk, obj) => {
+      if (!obj.pharmacy_id) obj.pharmacy_id = currentPharmacyId();
+      if (!obj.updated_at) obj.updated_at = new Date().toISOString();
+      if (obj.deleted_at === undefined) obj.deleted_at = null;
+    });
+    table.hook('updating', (mods, _pk, obj) => {
+      const m = mods as Record<string, unknown>;
+      const next: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      if (!obj.pharmacy_id && m.pharmacy_id === undefined) next.pharmacy_id = currentPharmacyId();
+      return next;
+    });
+  }
+}
+
+// ---------- এই ডিভাইসের ফার্মেসি পরিচয় ----------
+const PHARMACY_KEY = 'fp_pharmacy_id';
+
+/**
+ * ফার্মেসির আইডি এই ডিভাইসেই তৈরি হয়।
+ * পরে অ্যাকাউন্ট খুললে সার্ভারে ঠিক এই আইডি দিয়েই ফার্মেসি তৈরি হবে,
+ * তাই পুরোনো সব রেকর্ড কোনো রূপান্তর ছাড়াই মালিকের অ্যাকাউন্টে যুক্ত হবে।
+ */
+export function currentPharmacyId(): string {
+  if (typeof localStorage === 'undefined') return 'local';
+  let id = localStorage.getItem(PHARMACY_KEY);
+  if (!id) {
+    id = uuid();
+    localStorage.setItem(PHARMACY_KEY, id);
+  }
+  return id;
 }
 
 let _db: LocalDB | null = null;
@@ -147,7 +218,9 @@ const DEFAULT_CATEGORIES: { name: string; bn_name: string; is_recurring: boolean
 
 export const DEFAULT_SETTINGS: AppSettings = {
   id: 'app',
-  pharmacy_name: 'আশ শিফা ফার্মেসী',
+  // নতুন ইনস্টলে ফাঁকা — মালিক নিজের দোকানের নাম সেটিংসে দেবেন।
+  // পুরোনো ইনস্টলে সংরক্ষিত নাম অক্ষত থাকে (getSettings শুধু অনুপস্থিত ফিল্ড পূরণ করে)।
+  pharmacy_name: '',
   owner_name: null,
   phone: DEFAULT_PHONE,
   address: null,
@@ -190,7 +263,8 @@ const ALL_TABLES = [
 ] as const;
 
 export interface BackupDump {
-  app: 'asshifa';
+  /** পুরোনো ফাইলে 'asshifa' — সেগুলোও restore হবে। */
+  app: 'fridaypharma' | 'asshifa';
   version: number;
   exported_at: string;
   tables: Record<string, unknown[]>;
@@ -202,7 +276,7 @@ export async function exportAll(): Promise<BackupDump> {
   for (const t of ALL_TABLES) {
     tables[t] = await (d as unknown as Record<string, { toArray: () => Promise<unknown[]> }>)[t].toArray();
   }
-  return { app: 'asshifa', version: 1, exported_at: nowISO(), tables };
+  return { app: 'fridaypharma', version: 2, exported_at: nowISO(), tables };
 }
 
 /** dump-এ কতগুলো রেকর্ড আছে (restore preview-এর জন্য)। */
@@ -213,7 +287,9 @@ export function countRecords(dump: BackupDump): Record<string, number> {
 }
 
 export async function importAll(dump: BackupDump): Promise<void> {
-  if (dump.app !== 'asshifa' || !dump.tables) throw new Error('অবৈধ ব্যাকআপ ফাইল');
+  if ((dump.app !== 'fridaypharma' && dump.app !== 'asshifa') || !dump.tables) {
+    throw new Error('অবৈধ ব্যাকআপ ফাইল');
+  }
   const d = db();
   await d.transaction('rw', d.tables, async () => {
     for (const t of ALL_TABLES) {

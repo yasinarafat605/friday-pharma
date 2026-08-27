@@ -74,7 +74,7 @@ export default function BackupPage() {
     setBusy(true);
     try {
       const blob = await encryptDump(await exportAll(), pass);
-      download(blob, `asshifa-backup-${new Date().toISOString().slice(0, 10)}.enc`);
+      download(blob, `fridaypharma-backup-${new Date().toISOString().slice(0, 10)}.enc`);
       await markBackupTaken();
       await loadStatus();
       setMsg('এনক্রিপ্টেড ব্যাকআপ ডাউনলোড হয়েছে — USB বা নিরাপদ ফোল্ডারে রাখুন।');
@@ -102,7 +102,7 @@ export default function BackupPage() {
     try {
       // Restore-এর আগে বর্তমান ডেটার safety backup
       const safety = await encryptDump(await exportAll(), rPass);
-      download(safety, `asshifa-SAFETY-before-restore-${Date.now()}.enc`);
+      download(safety, `fridaypharma-SAFETY-before-restore-${Date.now()}.enc`);
       await importAll(preview.dump);
       setMsg('Restore সম্পন্ন — অ্যাপ রিলোড হচ্ছে');
       setTimeout(() => window.location.reload(), 800);

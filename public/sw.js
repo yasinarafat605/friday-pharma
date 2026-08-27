@@ -1,4 +1,4 @@
-// আশ শিফা ফার্মেসী — offline shell service worker.
+// Friday Pharma — offline shell service worker.
 // UI-এর ডেটা IndexedDB (Dexie) থেকে আসে, তাই SW শুধু পেজের খোলস cache করে।
 // কোনো cloud বা API নেই — সব ডেটা এই ডিভাইসেই।
 const CACHE = 'asshifa-shell-v2';

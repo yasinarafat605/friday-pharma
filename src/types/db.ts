@@ -1,5 +1,18 @@
 // অ্যাপ-জুড়ে ব্যবহৃত ধরন। সব ডেটা local (IndexedDB)। সব টাকা integer paisa।
 
+/**
+ * প্রতিটি রেকর্ডে থাকা সিঙ্ক-সংক্রান্ত ফিল্ড।
+ * pharmacy_id — কোন ফার্মেসির রেকর্ড (এক ফার্মেসির ডেটা অন্য কেউ দেখবে না)।
+ * updated_at  — শেষ কবে বদলেছে; সার্ভারে কী পাঠাতে হবে তা এখান থেকেই ঠিক হয়।
+ * deleted_at  — মুছে ফেলা রেকর্ড সত্যিই মোছা হয় না, চিহ্ন দেওয়া হয়, যাতে
+ *               মুছে ফেলার খবরটিও অন্য ডিভাইসে পৌঁছায়।
+ */
+export interface SyncFields {
+  pharmacy_id?: string;
+  updated_at?: string;
+  deleted_at?: string | null;
+}
+
 export type MedicineType =
   | 'syrup' | 'tablet' | 'capsule' | 'injection'
   | 'drop' | 'cream' | 'powder' | 'saline' | 'other';
@@ -16,7 +29,7 @@ export type AdjustmentReason =
 export type ExpenseSource = 'cash' | 'bkash' | 'nagad' | 'rocket' | 'bank' | 'other';
 export type LedgerType = 'opening' | 'sale_due' | 'payment' | 'return_adjust';
 
-export interface AppSettings {
+export interface AppSettings extends SyncFields {
   id: 'app';
   pharmacy_name: string;
   owner_name?: string | null;
@@ -35,7 +48,7 @@ export interface AppSettings {
   backup_reminder_days: number;
 }
 
-export interface Medicine {
+export interface Medicine extends SyncFields {
   id: string;
   name: string;
   bn_name?: string | null;
@@ -50,7 +63,7 @@ export interface Medicine {
   is_active: boolean;
 }
 
-export interface MedicineBatch {
+export interface MedicineBatch extends SyncFields {
   id: string;
   medicine_id: string;
   batch_no?: string | null;
@@ -60,7 +73,7 @@ export interface MedicineBatch {
   qty_in_stock: number;
 }
 
-export interface StockEntry {
+export interface StockEntry extends SyncFields {
   id: string;
   client_txn_id: string;
   batch_id: string;
@@ -76,7 +89,7 @@ export interface StockEntry {
   cancelled_reason?: string | null;
 }
 
-export interface Customer {
+export interface Customer extends SyncFields {
   id: string;
   name: string;
   phone?: string | null;
@@ -88,7 +101,7 @@ export interface Customer {
   current_due_paisa: number;
 }
 
-export interface CustomerLedger {
+export interface CustomerLedger extends SyncFields {
   id: string;
   customer_id: string;
   entry_type: LedgerType;
@@ -101,7 +114,7 @@ export interface CustomerLedger {
   entry_date: string;
 }
 
-export interface Sale {
+export interface Sale extends SyncFields {
   id: string;
   client_txn_id: string;
   txn_no: string;
@@ -118,7 +131,7 @@ export interface Sale {
   note?: string | null;
 }
 
-export interface SaleItem {
+export interface SaleItem extends SyncFields {
   id: string;
   sale_id: string;
   medicine_id: string;
@@ -129,7 +142,7 @@ export interface SaleItem {
   line_total_paisa: number;
 }
 
-export interface DuePayment {
+export interface DuePayment extends SyncFields {
   id: string;
   client_txn_id: string;
   receipt_ref: string;
@@ -141,7 +154,7 @@ export interface DuePayment {
   note?: string | null;
 }
 
-export interface ExpenseCategory {
+export interface ExpenseCategory extends SyncFields {
   id: string;
   name: string;
   bn_name: string;
@@ -149,7 +162,7 @@ export interface ExpenseCategory {
   sort_order: number;
 }
 
-export interface Expense {
+export interface Expense extends SyncFields {
   id: string;
   client_txn_id: string;
   expense_date: string;
@@ -161,7 +174,7 @@ export interface Expense {
   status: TxnStatus;
 }
 
-export interface CashSession {
+export interface CashSession extends SyncFields {
   id: string;
   session_date: string;
   opening_cash_paisa: number;
@@ -169,7 +182,7 @@ export interface CashSession {
   note?: string | null;
 }
 
-export interface StockAdjustment {
+export interface StockAdjustment extends SyncFields {
   id: string;
   client_txn_id: string;
   batch_id: string;
@@ -181,7 +194,7 @@ export interface StockAdjustment {
   cancelled_reason?: string | null;
 }
 
-export interface SaleReturn {
+export interface SaleReturn extends SyncFields {
   id: string;
   client_txn_id: string;
   sale_id: string;
@@ -193,7 +206,7 @@ export interface SaleReturn {
   cancelled_reason?: string | null;
 }
 
-export interface SaleReturnItem {
+export interface SaleReturnItem extends SyncFields {
   id: string;
   return_id: string;
   sale_item_id: string;
@@ -202,7 +215,7 @@ export interface SaleReturnItem {
   restock: boolean;
 }
 
-export interface AuditLog {
+export interface AuditLog extends SyncFields {
   id: string;
   entity: string;
   entity_id: string;

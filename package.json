@@ -1,8 +1,8 @@
 {
-  "name": "as-shifa-pharmacy",
+  "name": "friday-pharma",
   "version": "0.1.0",
   "private": true,
-  "description": "As-Shifa Pharmacy — offline-first local pharmacy management (single owner)",
+  "description": "Friday Pharma — offline-first pharmacy management for Bangladesh",
   "scripts": {
     "dev": "next dev",
     "build": "next build",

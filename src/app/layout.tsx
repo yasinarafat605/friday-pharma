@@ -11,10 +11,10 @@ const bangla = Noto_Sans_Bengali({
 });
 
 export const metadata: Metadata = {
-  title: 'আশ শিফা ফার্মেসী',
+  title: 'Friday Pharma — ফার্মেসি ব্যবস্থাপনা',
   description: 'সহজ হিসাব, নিরাপদ ব্যবস্থাপনা',
   manifest: '/manifest.json',
-  applicationName: 'আশ শিফা ফার্মেসী',
+  applicationName: 'Friday Pharma',
 };
 
 export const viewport: Viewport = {

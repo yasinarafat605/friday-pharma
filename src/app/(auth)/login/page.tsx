@@ -84,9 +84,10 @@ export default function LoginPage() {
       <div className="card w-full max-w-md">
         <div className="mb-6 text-center">
           <div className="mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-full bg-brand text-2xl font-bold text-white">
-            আশ
+            FP
           </div>
           <h1 className="text-2xl font-bold text-brand-dark">{L.appName}</h1>
+          <p className="text-sm text-gray-500">{L.appNameBn}</p>
           <p className="text-gray-500">{L.tagline}</p>
         </div>
 

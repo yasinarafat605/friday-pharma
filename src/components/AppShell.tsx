@@ -53,6 +53,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [lockErr, setLockErr] = useState('');
   const [backup, setBackup] = useState<BackupStatus | null>(null);
   const [backupHidden, setBackupHidden] = useState(false);
+  // শিরোনামে এই দোকানের নিজের নাম — না দিলে পণ্যের নাম।
+  const [shopName, setShopName] = useState(L.appName);
 
   // auth gate + settings
   useEffect(() => {
@@ -64,6 +66,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     getSettings().then((s) => {
       setAutoLockMs(Math.max(0, s.auto_lock_minutes) * 60_000);
       setBackup(backupStatus(s.last_backup_at, s.backup_reminder_days));
+      setShopName(s.pharmacy_name?.trim() || L.appName);
     }).catch(() => {});
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').catch(() => {});
@@ -116,7 +119,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       >
         <button className="flex items-center gap-2 text-brand-dark" onClick={() => setMenuOpen((v) => !v)} aria-label="মেনু">
           <span className="text-2xl">☰</span>
-          <span className="text-lg font-bold">{L.appName}</span>
+          <span className="text-lg font-bold">{shopName}</span>
         </button>
         <div className="flex items-center gap-3">
           <span className="badge badge-normal hidden sm:inline">🔒 এই ডিভাইসে নিরাপদ</span>
