@@ -12,14 +12,16 @@
 - **ড্যাশবোর্ড** — আজকের বিক্রয়/নগদ/বাকি, আদায়, খরচ, আনুমানিক লাভ, মোট পাওনা, স্টক মূল্য, কম স্টক ও মেয়াদ সতর্কতা
 - **বিক্রয়** — দ্রুত সার্চ, নগদ/বাকি/মিশ্র, ছাড়, স্টক auto কমে, FEFO, expired বিক্রি নিষিদ্ধ (কোনো bill/print নেই)
 - **নতুন স্টক** — batch + expiry ভিত্তিক, নতুন ওষুধ তৈরি
-- **ওষুধ ও স্টক** — সার্চ/ফিল্টার, কম স্টক (কমলা/লাল/সবুজ), মেয়াদ অবস্থা
+- **ওষুধ ও স্টক** — সার্চ ও ফিল্টার, কম স্টক (কমলা, লাল, সবুজ), মেয়াদ অবস্থা
+- **ওষুধ ব্যবস্থাপনা** — নাম, generic, কোম্পানি, ধরন, একক, কম স্টকের সীমা সংশোধন; ওষুধ বন্ধ বা চালু; batch-এর ভুল দাম, batch নম্বর ও মেয়াদ ঠিক করা — সবই audit log সহ, কিছুই মুছে যায় না
 - **পাওনাদার + বাকি আদায়** — profile, বর্তমান বাকি, overpayment রোধ
 - **খরচ** — ক্যাটাগরি সহ
 - **ক্যাশ হিসাব** — opening/actual, expected closing, difference
 - **রিপোর্ট** — দৈনিক/মাসিক/ইনভেন্টরি + CSV export
 - **বিক্রয় রিটার্ন** — restock flag, refund, due auto-adjust
 - **স্টক সমন্বয়** — নষ্ট/হারানো/মেয়াদ/ভুল এন্ট্রি, কারণ বাধ্যতামূলক, audit
-- **ব্যাকআপ/Restore** — Web Crypto (AES-GCM) এনক্রিপ্টেড, restore preview + safety backup
+- **ব্যাকআপ ও Restore** — Web Crypto (AES-GCM) এনক্রিপ্টেড, restore preview ও safety backup
+- **ব্যাকআপ সতর্কতা** — শেষ ব্যাকআপের তারিখ মনে রাখে; নির্ধারিত দিনের বেশি হলে ড্যাশবোর্ড ও প্রতিটি পেজে মনে করিয়ে দেয় (সেটিংসে দিন সংখ্যা বদলানো যায়)
 - **সেটিংস** — ফার্মেসি তথ্য, alert নিয়ম, auto-lock, PIN পরিবর্তন
 
 ---
@@ -83,14 +85,14 @@ App ID `com.asshifa.pharmacy`; আইকন সোর্স `resources/icon.png`
 ```
 docs/            পরিকল্পনা ও গাইড
 public/          manifest, service worker (PWA)
-src/app/         পেজ: (auth)/login, (app)/dashboard…settings
+src/app/         পেজ: (auth)/login, (app)/dashboard, medicines … settings
 src/components/  AppShell, StatCard
 src/lib/
   auth.ts        PIN hash/verify/reset, session lock
   db/local.ts    Dexie DB (সব entity) + seed + export/import
   data.ts        সব ব্যবসায়িক নিয়ম ও হিসাব (transaction)
   money.ts       paisa utils
-  business-rules.ts  low-stock / expiry / FEFO / due নিয়ম
+  business-rules.ts  low-stock, expiry, FEFO, due ও ব্যাকআপ সতর্কতার নিয়ম
   csv.ts, i18n/, validation/
 src/types/       ধরন
 ```
@@ -108,7 +110,7 @@ PIN কখনো plain সংরক্ষণ হয় না (salt + বহু-
 ## 🧪 টেস্ট
 
 ```bash
-npm run test        # vitest (money, business-rules)
+npm run test        # vitest (money, business-rules, backup-status)
 npm run typecheck
 ```
 

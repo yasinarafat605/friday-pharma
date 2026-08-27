@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { fetchStockRows } from '@/lib/data';
 import { formatTaka, toBanglaDigits } from '@/lib/money';
 import { stockColorClass } from '@/lib/business-rules';
@@ -59,7 +60,12 @@ export default function InventoryPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-bold text-brand-dark">{L.nav.inventory}</h1>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-2xl font-bold text-brand-dark">{L.nav.inventory}</h1>
+        <Link href="/medicines" className="btn-outline px-4 py-2 text-sm">
+          ✏️ {L.nav.medicines}
+        </Link>
+      </div>
 
       <input className="input" placeholder="নাম / জেনেরিক / কোম্পানি / ব্যাচ খুঁজুন…"
         value={q} onChange={(e) => setQ(e.target.value)} />

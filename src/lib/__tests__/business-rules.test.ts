@@ -65,7 +65,7 @@ describe('FEFO ordering', () => {
       { expiry_date: '2026-07-13', qty_in_stock: 9 }, // expired
       { expiry_date: '2026-12-01', qty_in_stock: 2 },
     ];
-    const sorted = sortBatchesFEFO(batches);
+    const sorted = sortBatchesFEFO(batches, TODAY);
     expect(sorted.map((b) => b.expiry_date)).toEqual(['2026-08-01', '2026-12-01', '2027-01-01']);
   });
 });

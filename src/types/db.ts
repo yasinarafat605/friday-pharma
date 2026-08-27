@@ -29,6 +29,10 @@ export interface AppSettings {
   low_stock_tablet: number;
   low_stock_capsule: number;
   expiry_alert_days: number;
+  /** সর্বশেষ সফল ব্যাকআপের সময় (ISO)। কখনো না নিলে null। */
+  last_backup_at?: string | null;
+  /** কত দিন পর ব্যাকআপ মনে করিয়ে দেবে। */
+  backup_reminder_days: number;
 }
 
 export interface Medicine {

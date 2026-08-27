@@ -5,6 +5,8 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { isUnlocked, lock, verifyPin, PIN_LENGTH } from '@/lib/auth';
 import { getSettings } from '@/lib/db/local';
+import { backupStatus, type BackupStatus } from '@/lib/business-rules';
+import { toBanglaDigits } from '@/lib/money';
 import { L } from '@/lib/i18n/labels';
 
 const NAV = [
@@ -12,6 +14,7 @@ const NAV = [
   { href: '/sales', label: L.nav.sales, icon: '🧾' },
   { href: '/add-stock', label: L.nav.addStock, icon: '➕' },
   { href: '/inventory', label: L.nav.inventory, icon: '💊' },
+  { href: '/medicines', label: L.nav.medicines, icon: '✏️' },
   { href: '/customers', label: L.nav.customers, icon: '👥' },
   { href: '/due-collection', label: L.nav.dueCollection, icon: '💰' },
   { href: '/expenses', label: L.nav.expenses, icon: '🧮' },
@@ -40,6 +43,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [autoLockMs, setAutoLockMs] = useState(3 * 60_000);
   const [unlockPin, setUnlockPin] = useState('');
   const [lockErr, setLockErr] = useState('');
+  const [backup, setBackup] = useState<BackupStatus | null>(null);
+  const [backupHidden, setBackupHidden] = useState(false);
 
   // auth gate + settings
   useEffect(() => {
@@ -48,7 +53,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       return;
     }
     setReady(true);
-    getSettings().then((s) => setAutoLockMs(Math.max(0, s.auto_lock_minutes) * 60_000)).catch(() => {});
+    getSettings().then((s) => {
+      setAutoLockMs(Math.max(0, s.auto_lock_minutes) * 60_000);
+      setBackup(backupStatus(s.last_backup_at, s.backup_reminder_days));
+    }).catch(() => {});
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').catch(() => {});
     }
@@ -128,7 +136,25 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </ul>
         </nav>
 
-        <main className="flex-1 p-4 pb-24 md:pb-4">{children}</main>
+        <main className="flex-1 p-4 pb-24 md:pb-4">
+          {backup?.overdue && !backupHidden && pathname !== '/backup' && (
+            <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl2 border-2 border-alert/40 bg-alert/10 px-4 py-3">
+              <span className="text-2xl">💾</span>
+              <p className="flex-1 text-sm font-medium text-ink">
+                {backup.never
+                  ? 'আপনি এখনো কোনো ব্যাকআপ নেননি। ফোন বা ব্রাউজারের ডেটা মুছে গেলে সব হিসাব হারিয়ে যাবে।'
+                  : `শেষ ব্যাকআপ ${toBanglaDigits(backup.daysSince ?? 0)} দিন আগে। নতুন ব্যাকআপ নেওয়ার সময় হয়েছে।`}
+              </p>
+              <Link href="/backup" className="btn-primary px-4 py-2 text-sm" onClick={() => setBackupHidden(true)}>
+                এখনই ব্যাকআপ নিন
+              </Link>
+              <button className="text-sm text-gray-500 underline" onClick={() => setBackupHidden(true)}>
+                পরে
+              </button>
+            </div>
+          )}
+          {children}
+        </main>
       </div>
 
       {/* মোবাইল bottom nav — বড় বাটন, দ্রুত ব্যবহার */}

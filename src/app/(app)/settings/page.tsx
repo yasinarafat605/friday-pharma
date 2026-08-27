@@ -3,6 +3,8 @@
 import { useEffect, useState } from 'react';
 import { fetchSettings, saveSettings } from '@/lib/data';
 import { setPin, isValidPinFormat, PIN_LENGTH } from '@/lib/auth';
+import { backupStatus } from '@/lib/business-rules';
+import { toBanglaDigits } from '@/lib/money';
 import { L } from '@/lib/i18n/labels';
 import type { AppSettings } from '@/types/db';
 
@@ -56,6 +58,20 @@ export default function SettingsPage() {
         <NumField label="কম স্টক: সিরাপ" v={s.low_stock_syrup} on={(v) => setS({ ...s, low_stock_syrup: v })} />
         <NumField label="কম স্টক: ট্যাবলেট" v={s.low_stock_tablet} on={(v) => setS({ ...s, low_stock_tablet: v })} />
         <NumField label="কম স্টক: ক্যাপসুল" v={s.low_stock_capsule} on={(v) => setS({ ...s, low_stock_capsule: v })} />
+        <NumField label="ব্যাকআপ মনে করানো (দিন)" v={s.backup_reminder_days}
+          on={(v) => setS({ ...s, backup_reminder_days: Math.max(1, v) })} />
+      </div>
+
+      <div className="card space-y-1 text-sm text-gray-600">
+        <p>
+          <b>শেষ ব্যাকআপ:</b>{' '}
+          {s.last_backup_at
+            ? `${toBanglaDigits(s.last_backup_at.slice(0, 10))} (${toBanglaDigits(backupStatus(s.last_backup_at, s.backup_reminder_days).daysSince ?? 0)} দিন আগে)`
+            : 'এখনো নেওয়া হয়নি'}
+        </p>
+        <p>
+          এই সংখ্যার চেয়ে বেশি দিন পার হলে প্রতিটি পেজে ব্যাকআপ নেওয়ার সতর্কতা দেখাবে।
+        </p>
       </div>
 
       <div className="card space-y-1 text-sm text-gray-600">

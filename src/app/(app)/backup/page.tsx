@@ -1,7 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { exportAll, importAll, countRecords, type BackupDump } from '@/lib/db/local';
+import { fetchSettings, markBackupTaken } from '@/lib/data';
+import { backupStatus, type BackupStatus } from '@/lib/business-rules';
+import { toBanglaDigits } from '@/lib/money';
 import { L } from '@/lib/i18n/labels';
 
 // এনক্রিপ্টেড local backup/restore (Web Crypto AES-GCM, PBKDF2 key)।
@@ -47,6 +50,17 @@ export default function BackupPage() {
   const [pass, setPass] = useState('');
   const [msg, setMsg] = useState('');
   const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<BackupStatus | null>(null);
+  const [lastAt, setLastAt] = useState<string | null>(null);
+
+  const loadStatus = useCallback(async () => {
+    try {
+      const s = await fetchSettings();
+      setLastAt(s.last_backup_at ?? null);
+      setStatus(backupStatus(s.last_backup_at, s.backup_reminder_days));
+    } catch { /* status না দেখালেও ব্যাকআপ কাজ করবে */ }
+  }, []);
+  useEffect(() => { void loadStatus(); }, [loadStatus]);
 
   // restore state
   const [rPass, setRPass] = useState('');
@@ -61,7 +75,9 @@ export default function BackupPage() {
     try {
       const blob = await encryptDump(await exportAll(), pass);
       download(blob, `asshifa-backup-${new Date().toISOString().slice(0, 10)}.enc`);
-      setMsg('এনক্রিপ্টেড ব্যাকআপ ডাউনলোড হয়েছে — USB/নিরাপদ ফোল্ডারে রাখুন।');
+      await markBackupTaken();
+      await loadStatus();
+      setMsg('এনক্রিপ্টেড ব্যাকআপ ডাউনলোড হয়েছে — USB বা নিরাপদ ফোল্ডারে রাখুন।');
     } catch (e) {
       setMsg(e instanceof Error ? e.message : 'ব্যাকআপ ব্যর্থ');
     } finally { setBusy(false); }
@@ -98,6 +114,29 @@ export default function BackupPage() {
   return (
     <div className="mx-auto max-w-xl space-y-4">
       <h1 className="text-2xl font-bold text-brand-dark">{L.nav.backup}</h1>
+
+      {/* শেষ ব্যাকআপের অবস্থা */}
+      {status && (
+        <div className={`card flex items-center gap-3 ${
+          status.overdue ? 'border-alert/40 bg-alert/10' : 'border-success/30 bg-success/5'}`}>
+          <span className="text-3xl">{status.overdue ? '⚠️' : '✅'}</span>
+          <div className="text-sm">
+            <p className="font-bold text-ink">
+              {status.never
+                ? 'এখনো কোনো ব্যাকআপ নেওয়া হয়নি'
+                : `শেষ ব্যাকআপ ${toBanglaDigits(status.daysSince ?? 0)} দিন আগে`}
+            </p>
+            {lastAt && (
+              <p className="text-gray-600">তারিখ: {toBanglaDigits(lastAt.slice(0, 10))}</p>
+            )}
+            <p className="text-gray-600">
+              {status.overdue
+                ? 'এখনই একটি নতুন ব্যাকআপ নিন।'
+                : 'ব্যাকআপ হালনাগাদ আছে।'}
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Export */}
       <div className="card space-y-3">

@@ -58,12 +58,37 @@ export function validateSaleQty(qty: number, available: number): string | null {
   return null;
 }
 
+// ---- ব্যাকআপ নিরাপত্তা ----
+export interface BackupStatus {
+  /** কখনো ব্যাকআপ নেওয়া হয়নি। */
+  never: boolean;
+  /** শেষ ব্যাকআপের পর কত দিন গেছে। */
+  daysSince: number | null;
+  /** মনে করিয়ে দেওয়ার সময় হয়েছে কিনা। */
+  overdue: boolean;
+}
+
+/** শেষ ব্যাকআপ কত পুরোনো এবং মনে করিয়ে দেওয়া দরকার কিনা (নিয়ম: data-loss প্রতিরোধ)। */
+export function backupStatus(
+  lastBackupAt?: string | null,
+  reminderDays = 7,
+  now: Date = new Date(),
+): BackupStatus {
+  if (!lastBackupAt) return { never: true, daysSince: null, overdue: true };
+  const then = new Date(lastBackupAt).getTime();
+  if (!Number.isFinite(then)) return { never: true, daysSince: null, overdue: true };
+  const days = Math.max(0, Math.floor((now.getTime() - then) / 86400000));
+  const limit = Math.max(1, Math.round(reminderDays));
+  return { never: false, daysSince: days, overdue: days >= limit };
+}
+
 /** FEFO: কাছাকাছি expiry batch আগে (Section ৫)। */
 export function sortBatchesFEFO<T extends { expiry_date?: string | null; qty_in_stock: number }>(
   batches: T[],
+  today: Date = new Date(),
 ): T[] {
   return [...batches]
-    .filter((b) => b.qty_in_stock > 0 && !isExpired(b.expiry_date))
+    .filter((b) => b.qty_in_stock > 0 && !isExpired(b.expiry_date, today))
     .sort((a, b) => {
       if (!a.expiry_date) return 1;
       if (!b.expiry_date) return -1;

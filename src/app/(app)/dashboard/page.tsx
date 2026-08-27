@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from 'react';
 import { StatCard } from '@/components/StatCard';
-import { fetchDashboardStats, fetchStockRows, type DashboardStats } from '@/lib/data';
+import Link from 'next/link';
+import { fetchDashboardStats, fetchStockRows, fetchSettings, type DashboardStats } from '@/lib/data';
+import { backupStatus, type BackupStatus } from '@/lib/business-rules';
 import { formatTaka, toBanglaDigits } from '@/lib/money';
 import { L } from '@/lib/i18n/labels';
 import type { StockRow } from '@/types/db';
@@ -10,15 +12,21 @@ import type { StockRow } from '@/types/db';
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [rows, setRows] = useState<StockRow[]>([]);
+  const [backup, setBackup] = useState<BackupStatus | null>(null);
+  const [lastBackupAt, setLastBackupAt] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     (async () => {
       try {
-        const [s, r] = await Promise.all([fetchDashboardStats(), fetchStockRows()]);
+        const [s, r, cfg] = await Promise.all([
+          fetchDashboardStats(), fetchStockRows(), fetchSettings(),
+        ]);
         setStats(s);
         setRows(r);
+        setLastBackupAt(cfg.last_backup_at ?? null);
+        setBackup(backupStatus(cfg.last_backup_at, cfg.backup_reminder_days));
       } catch (e) {
         setError(e instanceof Error ? e.message : 'ডেটা লোড ব্যর্থ');
       } finally {
@@ -41,7 +49,31 @@ export default function DashboardPage() {
       {loading && <p className="text-gray-500">{L.common.loading}</p>}
       {error && (
         <div className="card border-danger/30 bg-danger/5 text-danger">
-          {error} — Supabase সংযোগ ও `.env.local` যাচাই করুন।
+          {error} — অ্যাপটি রিলোড করে দেখুন। সব ডেটা এই ডিভাইসেই আছে।
+        </div>
+      )}
+
+      {backup && (
+        <div className={`card flex flex-wrap items-center gap-3 ${
+          backup.overdue ? 'border-alert/40 bg-alert/10' : 'border-success/30 bg-success/5'}`}>
+          <span className="text-3xl">{backup.overdue ? '💾' : '✅'}</span>
+          <div className="flex-1 text-sm">
+            <p className="font-bold text-ink">
+              {backup.never
+                ? 'ডেটা সুরক্ষিত নয় — এখনো ব্যাকআপ নেওয়া হয়নি'
+                : backup.overdue
+                  ? `ব্যাকআপ পুরোনো — ${toBanglaDigits(backup.daysSince ?? 0)} দিন আগের`
+                  : `ব্যাকআপ ঠিক আছে — ${toBanglaDigits(lastBackupAt?.slice(0, 10) ?? '')}`}
+            </p>
+            {backup.overdue && (
+              <p className="text-gray-600">
+                ব্রাউজারের ডেটা মুছে গেলে বা ফোন নষ্ট হলে হিসাব ফেরত আনার একমাত্র উপায় ব্যাকআপ।
+              </p>
+            )}
+          </div>
+          {backup.overdue && (
+            <Link href="/backup" className="btn-primary px-4 py-2 text-sm">ব্যাকআপ নিন</Link>
+          )}
         </div>
       )}
 

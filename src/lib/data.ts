@@ -7,7 +7,7 @@ import {
 } from '@/lib/db/local';
 import { isExpired, thresholdFor } from '@/lib/business-rules';
 import type {
-  StockRow, Customer, SaleItemInput, AdjustmentReason, Medicine,
+  StockRow, Customer, SaleItemInput, AdjustmentReason, Medicine, MedicineBatch,
   MedicineType, UnitType, AppSettings, ExpenseCategory, Expense,
 } from '@/types/db';
 
@@ -104,6 +104,11 @@ export async function saveSettings(patch: Partial<AppSettings>): Promise<void> {
   await audit('settings', 'app', 'update', patch);
 }
 
+/** সফল ব্যাকআপের পর তারিখ রেকর্ড হয় — ড্যাশবোর্ডের সতর্কতা এখান থেকে হিসাব হয়। */
+export async function markBackupTaken(at: string = nowISO()): Promise<void> {
+  await saveSettings({ last_backup_at: at });
+}
+
 // ============================================================
 // DASHBOARD
 // ============================================================
@@ -183,9 +188,100 @@ export async function upsertMedicine(input: {
     note: input.note ?? null,
     is_active: true,
   };
+  const dup = await db().medicines
+    .filter((m) => m.name.trim().toLowerCase() === med.name.toLowerCase())
+    .first();
+  if (dup) throw new Error('এই নামে আগেই একটি ওষুধ আছে');
   await db().medicines.add(med);
   await audit('medicine', med.id, 'create', { name: med.name });
   return med;
+}
+
+// ============================================================
+// MEDICINE ও BATCH ব্যবস্থাপনা (সংশোধন — audit সহ)
+// ============================================================
+
+/** সক্রিয় ও বন্ধ — সব ওষুধ (ব্যবস্থাপনা পেজের জন্য)। */
+export async function fetchAllMedicines(): Promise<Medicine[]> {
+  await ensureSeeded();
+  const meds = await db().medicines.toArray();
+  meds.sort((a, b) => a.name.localeCompare(b.name));
+  return meds;
+}
+
+/** এক ওষুধের সব batch, মেয়াদ অনুসারে (আগে শেষ হবে যেটি, আগে)। */
+export async function fetchBatchesForMedicine(medicineId: string): Promise<MedicineBatch[]> {
+  const bs = await db().batches.where('medicine_id').equals(medicineId).toArray();
+  bs.sort((a, b) => (a.expiry_date ?? '9999-12-31').localeCompare(b.expiry_date ?? '9999-12-31'));
+  return bs;
+}
+
+/** ওষুধের তথ্য সংশোধন। নাম ফাঁকা বা ডুপ্লিকেট হলে বাতিল; পুরোনো মান audit-এ থাকে। */
+export async function updateMedicine(id: string, patch: {
+  name?: string; bn_name?: string | null; generic_name?: string | null;
+  company?: string | null; type?: MedicineType; unit?: UnitType;
+  low_stock_threshold?: number | null; note?: string | null;
+}): Promise<Medicine> {
+  const d = db();
+  const cur = await d.medicines.get(id);
+  if (!cur) throw new Error('ওষুধ পাওয়া যায়নি');
+  const name = (patch.name ?? cur.name).trim();
+  if (!name) throw new Error('ওষুধের নাম দিন');
+  const clash = await d.medicines
+    .filter((m) => m.id !== id && m.name.trim().toLowerCase() === name.toLowerCase())
+    .first();
+  if (clash) throw new Error('এই নামে আরেকটি ওষুধ আছে');
+  const th = patch.low_stock_threshold;
+  if (th != null && (!Number.isFinite(th) || th < 0)) {
+    throw new Error('কম স্টকের সীমা ০ বা তার বেশি হতে হবে');
+  }
+  const next: Medicine = { ...cur, ...patch, name };
+  await d.medicines.put(next);
+  await audit('medicine', id, 'update', next, cur);
+  return next;
+}
+
+/** ওষুধ বন্ধ বা চালু। বন্ধ হলে বিক্রয় ও স্টক তালিকায় আসে না, রেকর্ড মুছে যায় না। */
+export async function setMedicineActive(id: string, active: boolean): Promise<{ remaining_qty: number }> {
+  const d = db();
+  const cur = await d.medicines.get(id);
+  if (!cur) throw new Error('ওষুধ পাওয়া যায়নি');
+  const batches = await d.batches.where('medicine_id').equals(id).toArray();
+  const remaining = sum(batches.map((b) => b.qty_in_stock));
+  await d.medicines.put({ ...cur, is_active: active });
+  await audit('medicine', id, active ? 'activate' : 'deactivate',
+    { is_active: active, remaining_qty: remaining }, { is_active: cur.is_active });
+  return { remaining_qty: remaining };
+}
+
+/** batch-এর ভুল দাম, batch নম্বর বা মেয়াদ সংশোধন। পরিমাণ এখানে বদলানো যায় না — স্টক সমন্বয় ব্যবহার করুন। */
+export async function updateBatch(batchId: string, patch: {
+  batch_no?: string | null; expiry_date?: string | null;
+  purchase_price_paisa?: number; sale_price_paisa?: number;
+}): Promise<MedicineBatch> {
+  const d = db();
+  const cur = await d.batches.get(batchId);
+  if (!cur) throw new Error('batch পাওয়া যায়নি');
+  const purchase = patch.purchase_price_paisa ?? cur.purchase_price_paisa;
+  const sale = patch.sale_price_paisa ?? cur.sale_price_paisa;
+  if (!Number.isFinite(purchase) || purchase < 0) throw new Error('ক্রয়মূল্য ০ বা তার বেশি হতে হবে');
+  if (!Number.isFinite(sale) || sale < 0) throw new Error('বিক্রয়মূল্য ০ বা তার বেশি হতে হবে');
+  const batchNo = patch.batch_no === undefined ? cur.batch_no : (patch.batch_no || null);
+  const clash = await d.batches
+    .where('medicine_id').equals(cur.medicine_id)
+    .filter((b) => b.id !== batchId && (b.batch_no ?? '') === (batchNo ?? ''))
+    .first();
+  if (clash) throw new Error('এই ওষুধে একই batch নম্বর আগেই আছে');
+  const next: MedicineBatch = {
+    ...cur,
+    batch_no: batchNo,
+    expiry_date: patch.expiry_date === undefined ? cur.expiry_date : (patch.expiry_date || null),
+    purchase_price_paisa: Math.round(purchase),
+    sale_price_paisa: Math.round(sale),
+  };
+  await d.batches.put(next);
+  await audit('batch', batchId, 'update', next, cur);
+  return next;
 }
 
 export async function upsertCustomer(input: {

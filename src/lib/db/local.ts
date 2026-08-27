@@ -138,6 +138,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   low_stock_tablet: 10,
   low_stock_capsule: 10,
   expiry_alert_days: 90,
+  last_backup_at: null,
+  backup_reminder_days: 7,
 };
 
 /** প্রথমবার settings ও খরচ ক্যাটাগরি তৈরি (idempotent)। */
@@ -155,7 +157,9 @@ export async function ensureSeeded(): Promise<void> {
 
 export async function getSettings(): Promise<AppSettings> {
   await ensureSeeded();
-  return (await db().settings.get('app'))!;
+  const stored = await db().settings.get('app');
+  // পুরোনো ডিভাইসে সংরক্ষিত settings-এ নতুন ফিল্ড না থাকলে default দিয়ে পূরণ হয়।
+  return { ...DEFAULT_SETTINGS, ...(stored ?? {}), id: 'app' };
 }
 
 // ---------- সম্পূর্ণ ডেটা export/import (ব্যাকআপ) ----------
