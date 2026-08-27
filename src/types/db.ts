@@ -39,6 +39,8 @@ export interface Medicine {
   id: string;
   name: string;
   bn_name?: string | null;
+  /** পাওয়ার, যেমন "500 mg" বা "120 mg/5 ml"। পুরোনো রেকর্ডে না থাকতে পারে। */
+  strength?: string | null;
   generic_name?: string | null;
   company?: string | null;
   type: MedicineType;
@@ -222,6 +224,7 @@ export interface StockRow {
   medicine_id: string;
   name: string;
   bn_name?: string | null;
+  strength?: string | null;
   generic_name?: string | null;
   company?: string | null;
   type: MedicineType;

@@ -32,6 +32,7 @@ export default function InventoryPage() {
       const match =
         !s ||
         r.name.toLowerCase().includes(s) ||
+        (r.strength ?? '').toLowerCase().includes(s) ||
         (r.generic_name ?? '').toLowerCase().includes(s) ||
         (r.company ?? '').toLowerCase().includes(s) ||
         (r.batch_no ?? '').toLowerCase().includes(s);
@@ -99,7 +100,7 @@ export default function InventoryPage() {
             {filtered.map((r) => (
               <tr key={r.batch_id}>
                 <td className="p-3">
-                  <div className="font-semibold">{r.name}</div>
+                  <div className="font-semibold">{r.name}{r.strength ? ` ${r.strength}` : ''}</div>
                   <div className="text-xs text-gray-400">{r.company} · {r.generic_name}</div>
                 </td>
                 <td className="p-3">{L.medicineType[r.type]}</td>

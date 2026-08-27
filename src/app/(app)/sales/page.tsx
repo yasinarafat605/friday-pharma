@@ -53,6 +53,7 @@ export default function SalesPage() {
           r.qty_in_stock > 0 &&
           !isExpired(r.expiry_date) &&
           (r.name.toLowerCase().includes(s) ||
+            (r.strength ?? '').toLowerCase().includes(s) ||
             (r.generic_name ?? '').toLowerCase().includes(s) ||
             (r.company ?? '').toLowerCase().includes(s)),
       )
@@ -75,7 +76,7 @@ export default function SalesPage() {
         {
           batch_id: r.batch_id,
           medicine_id: r.medicine_id,
-          name: r.name,
+          name: r.strength ? `${r.name} ${r.strength}` : r.name,
           unit: r.unit,
           available: r.qty_in_stock,
           qty: 1,
@@ -173,7 +174,7 @@ export default function SalesPage() {
                     onClick={() => addToCart(r)}
                   >
                     <span>
-                      <span className="font-semibold">{r.name}</span>{' '}
+                      <span className="font-semibold">{r.name}{r.strength ? ` ${r.strength}` : ''}</span>{' '}
                       <span className="text-sm text-gray-500">
                         {r.company ?? ''} · {r.generic_name ?? ''}
                       </span>

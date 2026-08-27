@@ -6,6 +6,8 @@ import {
   fetchRecentStockEntries, updateStockEntry, cancelStockEntry, type StockEntryRow,
 } from '@/lib/data';
 import { CancelButton, StatusBadge } from '@/components/CancelButton';
+import { ScanPanel } from '@/components/ScanPanel';
+import type { ParsedLabel } from '@/lib/scan/parse';
 import { formatTaka, takaToPaisa, paisaToTaka, toBanglaDigits } from '@/lib/money';
 import { L } from '@/lib/i18n/labels';
 import type { Medicine, MedicineType, UnitType } from '@/types/db';
@@ -23,7 +25,10 @@ export default function AddStockPage() {
   // existing selection
   const [medicineId, setMedicineId] = useState('');
   // new medicine
-  const [nm, setNm] = useState({ name: '', generic_name: '', company: '', type: 'tablet' as MedicineType, unit: 'piece' as UnitType });
+  const [nm, setNm] = useState({
+    name: '', strength: '', generic_name: '', company: '',
+    type: 'tablet' as MedicineType, unit: 'piece' as UnitType,
+  });
   // batch/stock
   const [batchNo, setBatchNo] = useState('');
   const [expiry, setExpiry] = useState('');
@@ -46,6 +51,27 @@ export default function AddStockPage() {
   }, []);
 
   useEffect(() => { void loadMeds(); void loadEntries(); }, [loadMeds, loadEntries]);
+
+  /** স্ক্যান থেকে পাওয়া তথ্য নতুন ওষুধের ফর্মে বসায়। দাম সবসময় হাতে দিতে হয়। */
+  function applyScan(parsed: ParsedLabel) {
+    setMode('new');
+    setNm((prev) => ({
+      ...prev,
+      name: parsed.name || prev.name,
+      strength: parsed.strength ?? prev.strength,
+      generic_name: parsed.generic ?? prev.generic_name,
+      company: parsed.company ?? prev.company,
+      type: parsed.type ?? prev.type,
+    }));
+    setMsg('স্ক্যান থেকে তথ্য বসানো হয়েছে — যাচাই করে দাম দিন');
+  }
+
+  /** স্ক্যান করা ওষুধ আগে থেকেই তালিকায় থাকলে সেটিই নির্বাচন হয়। */
+  function useExisting(id: string) {
+    setMode('existing');
+    setMedicineId(id);
+    setMsg('তালিকায় থাকা ওষুধ নির্বাচন করা হয়েছে — batch, মেয়াদ ও দাম দিন');
+  }
 
   function startEdit(r: StockEntryRow) {
     setEditId(r.id);
@@ -107,7 +133,10 @@ export default function AddStockPage() {
       const queued = (res as { queued?: boolean })?.queued;
       setMsg(queued ? 'স্টক সংরক্ষিত (অফলাইন) — সিঙ্ক অপেক্ষমাণ' : 'স্টক সফলভাবে যোগ হয়েছে');
       setBatchNo(''); setExpiry(''); setQty(''); setPurchase(''); setSale(''); setInvoice('');
-      if (mode === 'new') { setNm({ name: '', generic_name: '', company: '', type: 'tablet', unit: 'piece' }); await loadMeds(); }
+      if (mode === 'new') {
+        setNm({ name: '', strength: '', generic_name: '', company: '', type: 'tablet', unit: 'piece' });
+        await loadMeds();
+      }
       await loadEntries();
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'ব্যর্থ');
@@ -127,6 +156,13 @@ export default function AddStockPage() {
           onClick={() => setMode('new')}>নতুন ওষুধ</button>
       </div>
 
+      <ScanPanel
+        medicines={medicines}
+        onUseParsed={applyScan}
+        onUseExisting={useExisting}
+        onError={setErr}
+      />
+
       <form onSubmit={submit} className="card space-y-4">
         {mode === 'existing' ? (
           <div>
@@ -142,6 +178,8 @@ export default function AddStockPage() {
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <div><label className="label">ওষুধের নাম *</label>
               <input className="input" value={nm.name} onChange={(e) => setNm({ ...nm, name: e.target.value })} /></div>
+            <div><label className="label">পাওয়ার (যেমন 500 mg)</label>
+              <input className="input" value={nm.strength} onChange={(e) => setNm({ ...nm, strength: e.target.value })} /></div>
             <div><label className="label">জেনেরিক নাম</label>
               <input className="input" value={nm.generic_name} onChange={(e) => setNm({ ...nm, generic_name: e.target.value })} /></div>
             <div><label className="label">কোম্পানি</label>

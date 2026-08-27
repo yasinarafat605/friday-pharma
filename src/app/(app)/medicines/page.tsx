@@ -39,6 +39,7 @@ export default function MedicinesPage() {
       if (tab === 'inactive' && m.is_active) return false;
       if (!s) return true;
       return m.name.toLowerCase().includes(s)
+        || (m.strength ?? '').toLowerCase().includes(s)
         || (m.bn_name ?? '').toLowerCase().includes(s)
         || (m.generic_name ?? '').toLowerCase().includes(s)
         || (m.company ?? '').toLowerCase().includes(s);
@@ -124,6 +125,7 @@ function MedicineCard({
   const [form, setForm] = useState({
     name: med.name,
     bn_name: med.bn_name ?? '',
+    strength: med.strength ?? '',
     generic_name: med.generic_name ?? '',
     company: med.company ?? '',
     type: med.type,
@@ -152,6 +154,7 @@ function MedicineCard({
       await updateMedicine(med.id, {
         name: form.name,
         bn_name: form.bn_name.trim() || null,
+        strength: form.strength.trim() || null,
         generic_name: form.generic_name.trim() || null,
         company: form.company.trim() || null,
         type: form.type,
@@ -207,7 +210,8 @@ function MedicineCard({
       <button className="flex w-full items-center justify-between gap-3 text-left" onClick={onToggle}>
         <div>
           <p className="font-bold text-brand-dark">
-            {med.name} {!med.is_active && <span className="badge bg-gray-200 text-gray-600">বন্ধ</span>}
+            {med.name}{med.strength ? ` ${med.strength}` : ''}{' '}
+            {!med.is_active && <span className="badge bg-gray-200 text-gray-600">বন্ধ</span>}
           </p>
           <p className="text-sm text-gray-500">
             {L.medicineType[med.type]} · {L.unit[med.unit]}
@@ -223,6 +227,7 @@ function MedicineCard({
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <Field label="নাম *" v={form.name} on={(v) => setForm({ ...form, name: v })} />
             <Field label="বাংলা নাম" v={form.bn_name} on={(v) => setForm({ ...form, bn_name: v })} />
+            <Field label="পাওয়ার (যেমন 500 mg)" v={form.strength} on={(v) => setForm({ ...form, strength: v })} />
             <Field label="Generic নাম" v={form.generic_name} on={(v) => setForm({ ...form, generic_name: v })} />
             <Field label="কোম্পানি" v={form.company} on={(v) => setForm({ ...form, company: v })} />
             <div>

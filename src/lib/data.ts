@@ -19,6 +19,16 @@ function dateOf(iso: string): string {
 function sum(xs: number[]): number {
   return xs.reduce((a, b) => a + (b || 0), 0);
 }
+/** নাম ও পাওয়ার মিলে একটি ওষুধকে আলাদা করে — Napa 500 আর Napa 665 ভিন্ন। */
+function sameMedicineKey(
+  a: { name: string; strength?: string | null },
+  b: { name: string; strength?: string | null },
+): boolean {
+  const key = (x: { name: string; strength?: string | null }) =>
+    `${x.name.trim().toLowerCase()}|${(x.strength ?? '').trim().toLowerCase()}`;
+  return key(a) === key(b);
+}
+
 /** পুরোনো রেকর্ডে status নেই — সেগুলো completed ধরা হয়। */
 function isActive(row: { status?: string }): boolean {
   return (row.status ?? 'completed') !== 'cancelled';
@@ -46,6 +56,7 @@ export async function fetchStockRows(): Promise<StockRow[]> {
       b.qty_in_stock <= 0 ? 'out' : b.qty_in_stock <= th ? 'low' : 'normal';
     rows.push({
       batch_id: b.id, medicine_id: m.id, name: m.name, bn_name: m.bn_name,
+      strength: m.strength ?? null,
       generic_name: m.generic_name, company: m.company, type: m.type, unit: m.unit,
       batch_no: b.batch_no, expiry_date: b.expiry_date, qty_in_stock: b.qty_in_stock,
       purchase_price_paisa: b.purchase_price_paisa, sale_price_paisa: b.sale_price_paisa,
@@ -177,7 +188,8 @@ async function recomputeCustomerDue(customerId: string): Promise<void> {
 }
 
 export async function upsertMedicine(input: {
-  name: string; bn_name?: string | null; generic_name?: string | null;
+  name: string; bn_name?: string | null; strength?: string | null;
+  generic_name?: string | null;
   company?: string | null; type: MedicineType; unit: UnitType;
   low_stock_threshold?: number | null; note?: string | null;
 }): Promise<Medicine> {
@@ -186,6 +198,7 @@ export async function upsertMedicine(input: {
     id: uuid(),
     name: input.name.trim(),
     bn_name: input.bn_name ?? null,
+    strength: input.strength?.trim() || null,
     generic_name: input.generic_name ?? null,
     company: input.company ?? null,
     type: input.type,
@@ -195,9 +208,9 @@ export async function upsertMedicine(input: {
     is_active: true,
   };
   const dup = await db().medicines
-    .filter((m) => m.name.trim().toLowerCase() === med.name.toLowerCase())
+    .filter((m) => sameMedicineKey(m, med))
     .first();
-  if (dup) throw new Error('এই নামে আগেই একটি ওষুধ আছে');
+  if (dup) throw new Error('এই নাম ও পাওয়ারে আগেই একটি ওষুধ আছে');
   await db().medicines.add(med);
   await audit('medicine', med.id, 'create', { name: med.name });
   return med;
@@ -224,7 +237,8 @@ export async function fetchBatchesForMedicine(medicineId: string): Promise<Medic
 
 /** ওষুধের তথ্য সংশোধন। নাম ফাঁকা বা ডুপ্লিকেট হলে বাতিল; পুরোনো মান audit-এ থাকে। */
 export async function updateMedicine(id: string, patch: {
-  name?: string; bn_name?: string | null; generic_name?: string | null;
+  name?: string; bn_name?: string | null; strength?: string | null;
+  generic_name?: string | null;
   company?: string | null; type?: MedicineType; unit?: UnitType;
   low_stock_threshold?: number | null; note?: string | null;
 }): Promise<Medicine> {
@@ -233,15 +247,16 @@ export async function updateMedicine(id: string, patch: {
   if (!cur) throw new Error('ওষুধ পাওয়া যায়নি');
   const name = (patch.name ?? cur.name).trim();
   if (!name) throw new Error('ওষুধের নাম দিন');
+  const strength = patch.strength === undefined ? (cur.strength ?? null) : (patch.strength?.trim() || null);
   const clash = await d.medicines
-    .filter((m) => m.id !== id && m.name.trim().toLowerCase() === name.toLowerCase())
+    .filter((m) => m.id !== id && sameMedicineKey(m, { name, strength }))
     .first();
-  if (clash) throw new Error('এই নামে আরেকটি ওষুধ আছে');
+  if (clash) throw new Error('এই নাম ও পাওয়ারে আরেকটি ওষুধ আছে');
   const th = patch.low_stock_threshold;
   if (th != null && (!Number.isFinite(th) || th < 0)) {
     throw new Error('কম স্টকের সীমা ০ বা তার বেশি হতে হবে');
   }
-  const next: Medicine = { ...cur, ...patch, name };
+  const next: Medicine = { ...cur, ...patch, name, strength };
   await d.medicines.put(next);
   await audit('medicine', id, 'update', next, cur);
   return next;

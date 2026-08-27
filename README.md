@@ -12,7 +12,8 @@
 - **ড্যাশবোর্ড** — আজকের বিক্রয়/নগদ/বাকি, আদায়, খরচ, আনুমানিক লাভ, মোট পাওনা, স্টক মূল্য, কম স্টক ও মেয়াদ সতর্কতা
 - **বিক্রয়** — দ্রুত সার্চ, নগদ, বাকি বা মিশ্র, প্রতি আইটেমে দাম বদলানো যায় (পয়সা সহ), ছাড়, স্টক auto কমে, FEFO, expired বিক্রি নিষিদ্ধ (কোনো bill বা print নেই)
 - **বিক্রয় তালিকা** — সব বিক্রয়ের ইতিহাস; ভুল বিক্রয় বাতিল করলে স্টক ফেরত যায় ও বাকির হিসাব ঠিক হয়
-- **নতুন স্টক** — batch + expiry ভিত্তিক, নতুন ওষুধ তৈরি
+- **নতুন স্টক** — batch ও expiry ভিত্তিক, নতুন ওষুধ তৈরি
+- **পাতা স্ক্যান** (শুধু Android অ্যাপে) — ওষুধের পাতার ছবি তুললে নাম, পাওয়ার ও জেনেরিক নিজে থেকে বসে; আগে থেকে থাকা ওষুধের সাথে মিলিয়েও দেখায়। দাম সবসময় হাতে দিতে হয়
 - **ওষুধ ও স্টক** — সার্চ ও ফিল্টার, কম স্টক (কমলা, লাল, সবুজ), মেয়াদ অবস্থা
 - **ওষুধ ব্যবস্থাপনা** — নাম, generic, কোম্পানি, ধরন, একক, কম স্টকের সীমা সংশোধন; ওষুধ বন্ধ বা চালু; batch-এর ভুল দাম, batch নম্বর ও মেয়াদ ঠিক করা — সবই audit log সহ, কিছুই মুছে যায় না
 - **পাওনাদার ও বাকি আদায়** — profile, সম্পূর্ণ খতিয়ান, **পূর্বের বকেয়া** (অ্যাপ শুরুর আগের পুরোনো বাকি) যোগ ও সংশোধন, overpayment রোধ, আদায় বাতিল
@@ -61,6 +62,8 @@ npm run build && npm run start
 
 ## 📱 অ্যান্ড্রয়েড অ্যাপ (APK)
 
+> **পাতা স্ক্যান চাইলে Capacitor দিয়ে বিল্ড করতে হবে** (নিচের দ্বিতীয় পদ্ধতি)। PWABuilder-এর APK-তে স্ক্যান কাজ করবে না, কারণ ML Kit একটি নেটিভ SDK। সেটআপ: **[docs/ANDROID.md](docs/ANDROID.md)**।
+
 **সবচেয়ে সহজ (Android Studio ছাড়াই):** `npm run build` → `out/` ফোল্ডার **https://app.netlify.com/drop**-এ drag-drop → পাওয়া লিংক **https://www.pwabuilder.com**-এ দিয়ে সাইন করা APK ডাউনলোড → ফোনে ইনস্টল। পূর্ণ গাইড: **[docs/PWABUILDER.md](docs/PWABUILDER.md)**।
 
 **অথবা** Capacitor দিয়ে লোকাল বিল্ড (Android Studio):
@@ -94,6 +97,7 @@ src/lib/
   data.ts        সব ব্যবসায়িক নিয়ম ও হিসাব (transaction)
   money.ts       paisa utils
   business-rules.ts  low-stock, expiry, FEFO, due ও ব্যাকআপ সতর্কতার নিয়ম
+  scan/          পাতা স্ক্যান: parse.ts (নাম ও পাওয়ার চেনা), ocr.ts (ক্যামেরা ও ML Kit)
   csv.ts, i18n/, validation/
 src/types/       ধরন
 ```
@@ -119,7 +123,7 @@ PIN কখনো plain সংরক্ষণ হয় না (salt + বহু-
 ## 🧪 টেস্ট
 
 ```bash
-npm run test        # vitest (money, business-rules, backup-status)
+npm run test        # vitest (money, business-rules, backup-status, scan-parse)
 npm run typecheck
 ```
 
@@ -127,7 +131,7 @@ npm run typecheck
 
 ## 🚫 ইচ্ছাকৃতভাবে বাদ
 
-Supplier · Employee/staff · Multiple branch · Payroll · Online/auto payment ও বিকাশ/নগদ/রকেট/কার্ড API · Ecommerce/delivery · Bill/thermal/PDF/receipt printing · বিজ্ঞাপন/tracking/analytics · **cloud/backend সার্ভার**।
+ওষুধের অনলাইন ডেটাবেস (স্ক্যান শুধু পাতার লেখা পড়ে, ইন্টারনেট থেকে কিছু আনে না) · Supplier · Employee/staff · Multiple branch · Payroll · Online/auto payment ও বিকাশ/নগদ/রকেট/কার্ড API · Ecommerce/delivery · Bill/thermal/PDF/receipt printing · বিজ্ঞাপন/tracking/analytics · **cloud/backend সার্ভার**।
 
 > মোবাইল ব্যাংকিং টাকা এলে **manual entry** হিসেবে রেকর্ড হয় — কোনো API নেই।
 
