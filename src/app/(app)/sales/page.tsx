@@ -52,8 +52,7 @@ export default function SalesPage() {
         (r) =>
           r.qty_in_stock > 0 &&
           !isExpired(r.expiry_date) &&
-          (r.name.toLowerCase().includes(s) ||
-            (r.strength ?? '').toLowerCase().includes(s) ||
+          (`${r.name} ${r.strength ?? ''}`.toLowerCase().includes(s) ||
             (r.generic_name ?? '').toLowerCase().includes(s) ||
             (r.company ?? '').toLowerCase().includes(s)),
       )

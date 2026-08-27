@@ -110,7 +110,7 @@ export default function ExpensesPage() {
           <input className="input" type="date" value={date} onChange={(e) => setDate(e.target.value)} /></div>
         <div><label className="label">উৎস</label>
           <select className="input" value={source} onChange={(e) => setSource(e.target.value as ExpenseSource)}>
-            {SOURCES.map((s) => <option key={s} value={s}>{L.paymentMethod[s] ?? s}</option>)}
+            {SOURCES.map((s) => <option key={s} value={s}>{L.expenseSource[s] ?? s}</option>)}
           </select></div>
         <div className="md:col-span-2"><label className="label">সংক্ষিপ্ত বিবরণ</label>
           <input className="input" value={desc} onChange={(e) => setDesc(e.target.value)} /></div>
@@ -147,7 +147,7 @@ export default function ExpensesPage() {
                   <div><label className="label">উৎস</label>
                     <select className="input" value={editForm.source}
                       onChange={(e) => setEditForm({ ...editForm, source: e.target.value as ExpenseSource })}>
-                      {SOURCES.map((x) => <option key={x} value={x}>{L.paymentMethod[x] ?? x}</option>)}
+                      {SOURCES.map((x) => <option key={x} value={x}>{L.expenseSource[x] ?? x}</option>)}
                     </select></div>
                   <div className="md:col-span-2"><label className="label">বিবরণ</label>
                     <input className="input" value={editForm.desc}
@@ -164,7 +164,7 @@ export default function ExpensesPage() {
                       {catName(r.category_id)} <StatusBadge status={r.status} />
                     </p>
                     <p className="text-xs text-gray-500">
-                      {toBanglaDigits(r.expense_date)} · {L.paymentMethod[r.payment_source] ?? r.payment_source}
+                      {toBanglaDigits(r.expense_date)} · {L.expenseSource[r.payment_source] ?? r.payment_source}
                       {r.description ? ` · ${r.description}` : ''}
                     </p>
                   </div>

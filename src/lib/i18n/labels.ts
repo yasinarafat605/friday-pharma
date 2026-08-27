@@ -41,11 +41,20 @@ export const L = {
     box: 'বক্স',
   } as Record<string, string>,
   paymentType: { cash: 'নগদ', due: 'বাকিতে', mixed: 'নগদ ও বাকি' } as Record<string, string>,
+  // "নগদ টাকা" (হাতে হাতে) আর "নগদ" (মোবাইল ব্যাংকিং) যেন এক না দেখায়।
   paymentMethod: {
-    cash: 'নগদ',
+    cash: 'নগদ টাকা',
     bkash: 'বিকাশ',
-    nagad: 'নগদ',
+    nagad: 'নগদ (মোবাইল)',
     rocket: 'রকেট',
+    other: 'অন্যান্য',
+  } as Record<string, string>,
+  expenseSource: {
+    cash: 'নগদ টাকা',
+    bkash: 'বিকাশ',
+    nagad: 'নগদ (মোবাইল)',
+    rocket: 'রকেট',
+    bank: 'ব্যাংক',
     other: 'অন্যান্য',
   } as Record<string, string>,
   adjustmentReason: {

@@ -1,7 +1,7 @@
 // ব্যবসায়িক নিয়ম (Section ১৮) — client-side গণনা ও সতর্কতা।
 // চূড়ান্ত enforcement server (Postgres RPC/constraint)-এ; এটি UI feedback ও offline calc-এর জন্য।
 
-import type { Paisa } from './money';
+import { toBanglaDigits, type Paisa } from './money';
 
 export type StockStatus = 'out' | 'low' | 'normal';
 export type ExpiryStatus = 'expired' | 'd30' | 'd60' | 'd90' | 'ok' | 'unknown';
@@ -54,7 +54,7 @@ export function validateDuePayment(amountPaisa: Paisa, currentDuePaisa: Paisa): 
 /** বিক্রয়ে stock-এর বেশি বিক্রি রোধ (নিয়ম ১, ৭)। */
 export function validateSaleQty(qty: number, available: number): string | null {
   if (qty <= 0) return 'পরিমাণ ০-এর বেশি হতে হবে';
-  if (qty > available) return `স্টকে যথেষ্ট নেই (আছে ${available})`;
+  if (qty > available) return `স্টকে যথেষ্ট নেই (আছে ${toBanglaDigits(available)})`;
   return null;
 }
 

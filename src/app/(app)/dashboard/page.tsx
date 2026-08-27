@@ -85,7 +85,8 @@ export default function DashboardPage() {
             <StatCard label="আজকের বাকিতে বিক্রয়" valuePaisa={stats.todayDuePaisa} tone="alert" />
             <StatCard label="আজকে বাকি আদায়" valuePaisa={stats.todayCollectionPaisa} tone="success" />
             <StatCard label="আজকের মোট খরচ" valuePaisa={stats.todayExpensePaisa} tone="danger" />
-            <StatCard label="আজকের আনুমানিক লাভ" valuePaisa={stats.todayProfitPaisa} tone="brand" />
+            <StatCard label="আজকের মুনাফা (খরচ বাদে)" valuePaisa={stats.todayGrossProfitPaisa} />
+            <StatCard label="আজকের নিট লাভ" valuePaisa={stats.todayProfitPaisa} tone="brand" />
             <StatCard label="বর্তমান মোট পাওনা" valuePaisa={stats.totalDuePaisa} tone="alert" />
             <StatCard label="বর্তমান স্টকের মূল্য" valuePaisa={stats.stockValuePaisa} />
           </section>

@@ -33,9 +33,9 @@ export default function SettingsPage() {
   }
 
   async function changePin() {
-    const np = prompt(`নতুন PIN দিন (ঠিক ${PIN_LENGTH} সংখ্যা):`);
+    const np = prompt(`নতুন PIN দিন (ঠিক ${toBanglaDigits(PIN_LENGTH)} সংখ্যা):`);
     if (!np) return;
-    if (!isValidPinFormat(np)) { alert(`PIN অবশ্যই ${PIN_LENGTH} সংখ্যার হতে হবে`); return; }
+    if (!isValidPinFormat(np)) { alert(`PIN অবশ্যই ${toBanglaDigits(PIN_LENGTH)} সংখ্যার হতে হবে`); return; }
     const cf = prompt('নতুন PIN আবার দিন:');
     if (cf !== np) { alert('দুবার একই PIN হয়নি'); return; }
     try { await setPin(np); alert('PIN পরিবর্তন হয়েছে'); }
@@ -78,7 +78,7 @@ export default function SettingsPage() {
       </div>
 
       <div className="card space-y-1 text-sm text-gray-600">
-        <p><b>PIN রিসেট:</b> ভুলে গেলে লগইন স্ক্রিনে "PIN ভুলে গেছেন?" → ফোন নম্বরের শেষ ৪ সংখ্যা
+        <p><b>PIN রিসেট:</b> ভুলে গেলে লগইন স্ক্রিনে &quot;PIN ভুলে গেছেন?&quot; → ফোন নম্বরের শেষ ৪ সংখ্যা
           (<b>{phoneTail}</b>) দিয়ে নতুন PIN সেট করা যাবে। ফোন নম্বর বদলালে রিসেট কোডও বদলে যাবে।</p>
       </div>
 

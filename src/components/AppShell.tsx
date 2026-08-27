@@ -35,8 +35,15 @@ const BOTTOM = [
   { href: '/due-collection', label: L.nav.dueCollection, icon: '💰' },
 ];
 
+/** static export-এ ঠিকানা "/dashboard/" হয়, তাই তুলনার আগে শেষের স্ল্যাশ বাদ দেওয়া হয়। */
+function normalizePath(p: string | null): string {
+  if (!p) return '/';
+  const t = p.replace(/\/+$/, '');
+  return t === '' ? '/' : t;
+}
+
 export default function AppShell({ children }: { children: React.ReactNode }) {
-  const pathname = usePathname();
+  const pathname = normalizePath(usePathname());
   const router = useRouter();
   const [ready, setReady] = useState(false);
   const [locked, setLocked] = useState(false);
@@ -122,7 +129,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <nav className={`${menuOpen ? 'block' : 'hidden'} w-full shrink-0 border-r border-gray-100 bg-white p-3 md:block md:w-60`}>
           <ul className="space-y-1">
             {NAV.map((item) => {
-              const active = pathname === item.href;
+              const active = pathname === normalizePath(item.href);
               return (
                 <li key={item.href}>
                   <Link href={item.href} onClick={() => setMenuOpen(false)}
@@ -164,7 +171,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
       >
         {BOTTOM.map((item) => {
-          const active = pathname === item.href;
+          const active = pathname === normalizePath(item.href);
           return (
             <Link key={item.href} href={item.href}
               className={`flex flex-col items-center gap-0.5 py-2 text-xs font-medium ${

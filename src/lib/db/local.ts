@@ -70,8 +70,28 @@ export function uuid(): string {
 export function nowISO(): string {
   return new Date().toISOString();
 }
+
+/**
+ * স্থানীয় দিনপঞ্জির তারিখ (YYYY-MM-DD)।
+ * ISO/UTC ব্যবহার করলে বাংলাদেশে (UTC+৬) রাত ১২টা থেকে ভোর ৬টার লেনদেন
+ * আগের দিনে চলে যেত — তাই এখানে ফোনের নিজের তারিখ ব্যবহার হয়।
+ */
+export function localDate(d: Date = new Date()): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/** কোনো সংরক্ষিত ISO সময়কে স্থানীয় তারিখে রূপান্তর। */
+export function localDateOf(iso: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return Number.isFinite(d.getTime()) ? localDate(d) : iso.slice(0, 10);
+}
+
 export function todayISO(): string {
-  return new Date().toISOString().slice(0, 10);
+  return localDate();
 }
 
 /** unique client transaction id — duplicate submission রোধ। */

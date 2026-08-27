@@ -1,10 +1,18 @@
-// আশ শিফা ফার্মেসী — minimal offline shell service worker.
-// UI-এর ডেটা IndexedDB (Dexie) থেকে আসে, তাই SW শুধু app shell cache করে।
-const CACHE = 'asshifa-shell-v1';
-const SHELL = ['/', '/dashboard', '/manifest.json'];
+// আশ শিফা ফার্মেসী — offline shell service worker.
+// UI-এর ডেটা IndexedDB (Dexie) থেকে আসে, তাই SW শুধু পেজের খোলস cache করে।
+// কোনো cloud বা API নেই — সব ডেটা এই ডিভাইসেই।
+const CACHE = 'asshifa-shell-v2';
+
+// static export-এ প্রতিটি রুট ফোল্ডার, তাই শেষে স্ল্যাশ থাকতেই হবে।
+const SHELL = ['/', '/dashboard/', '/sales/', '/add-stock/', '/manifest.json'];
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).catch(() => {}));
+  event.waitUntil(
+    caches.open(CACHE).then((c) =>
+      // একটি ঠিকানা না পাওয়া গেলেও বাকিগুলো যেন cache হয়।
+      Promise.all(SHELL.map((u) => c.add(u).catch(() => {})))
+    )
+  );
   self.skipWaiting();
 });
 
@@ -20,8 +28,7 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   if (request.method !== 'GET') return;
-  // Never cache Supabase API calls — always network (offline handled by Dexie outbox).
-  if (request.url.includes('supabase.co')) return;
+  if (new URL(request.url).origin !== self.location.origin) return;
   event.respondWith(
     fetch(request)
       .then((res) => {
@@ -29,6 +36,8 @@ self.addEventListener('fetch', (event) => {
         caches.open(CACHE).then((c) => c.put(request, copy)).catch(() => {});
         return res;
       })
-      .catch(() => caches.match(request).then((r) => r || caches.match('/dashboard')))
+      .catch(() =>
+        caches.match(request).then((r) => r || caches.match('/dashboard/') || caches.match('/'))
+      )
   );
 });

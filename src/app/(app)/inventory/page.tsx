@@ -31,8 +31,7 @@ export default function InventoryPage() {
     return rows.filter((r) => {
       const match =
         !s ||
-        r.name.toLowerCase().includes(s) ||
-        (r.strength ?? '').toLowerCase().includes(s) ||
+        `${r.name} ${r.strength ?? ''}`.toLowerCase().includes(s) ||
         (r.generic_name ?? '').toLowerCase().includes(s) ||
         (r.company ?? '').toLowerCase().includes(s) ||
         (r.batch_no ?? '').toLowerCase().includes(s);

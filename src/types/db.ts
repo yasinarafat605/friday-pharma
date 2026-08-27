@@ -95,6 +95,8 @@ export interface CustomerLedger {
   amount_paisa: number; // + বাড়ায় (due), − কমায় (payment/return)
   ref_sale_id?: string | null;
   ref_payment_id?: string | null;
+  /** কোন রিটার্নের জন্য এই সমন্বয় — একাধিক রিটার্ন আলাদা রাখতে। */
+  ref_return_id?: string | null;
   note?: string | null;
   entry_date: string;
 }

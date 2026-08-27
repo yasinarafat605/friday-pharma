@@ -64,8 +64,9 @@ function Daily() {
       ['বাকিতে বিক্রয়', formatTaka(r.due_sales_paisa, { symbol: false })],
       ['বাকি আদায়', formatTaka(r.collection_paisa, { symbol: false })],
       ['মোট খরচ', formatTaka(r.expense_paisa, { symbol: false })],
-      ['Gross profit', formatTaka(r.gross_profit_paisa, { symbol: false })],
-      ['Net profit', formatTaka(r.net_profit_paisa, { symbol: false })],
+      ['রিটার্নে ফেরত', formatTaka(r.return_refund_paisa, { symbol: false })],
+      ['মোট মুনাফা (খরচ ছাড়া)', formatTaka(r.gross_profit_paisa, { symbol: false })],
+      ['নিট মুনাফা', formatTaka(r.net_profit_paisa, { symbol: false })],
       ['স্টক ক্রয়', formatTaka(r.stock_purchase_paisa, { symbol: false })],
     ]);
     downloadCSV(`daily-report-${date}.csv`, csv);
@@ -85,8 +86,11 @@ function Daily() {
           <LineRow label="বাকিতে বিক্রয়" value={formatTaka(r.due_sales_paisa)} tone="alert" />
           <LineRow label="বাকি আদায়" value={formatTaka(r.collection_paisa)} tone="success" />
           <LineRow label="মোট খরচ" value={formatTaka(r.expense_paisa)} tone="danger" />
-          <LineRow label="Gross profit" value={formatTaka(r.gross_profit_paisa)} />
-          <LineRow label="আনুমানিক Net profit" value={formatTaka(r.net_profit_paisa)}
+          {r.return_refund_paisa > 0 && (
+            <LineRow label="রিটার্নে ফেরত" value={formatTaka(r.return_refund_paisa)} tone="danger" />
+          )}
+          <LineRow label="মোট মুনাফা (দোকান খরচ বাদে)" value={formatTaka(r.gross_profit_paisa)} />
+          <LineRow label="নিট মুনাফা" value={formatTaka(r.net_profit_paisa)}
             tone={r.net_profit_paisa >= 0 ? 'success' : 'danger'} />
           <LineRow label="স্টক ক্রয়" value={formatTaka(r.stock_purchase_paisa)} />
         </div>
@@ -114,9 +118,10 @@ function Monthly() {
     const rows: [string, string][] = [
       ['মোট বিক্রয়', formatTaka(r.total_sales_paisa, { symbol: false })],
       ['ক্রয়মূল্য', formatTaka(r.purchase_cost_paisa, { symbol: false })],
-      ['Gross profit', formatTaka(r.gross_profit_paisa, { symbol: false })],
+      ['রিটার্নে ফেরত', formatTaka(r.return_refund_paisa, { symbol: false })],
+      ['মোট মুনাফা (খরচ ছাড়া)', formatTaka(r.gross_profit_paisa, { symbol: false })],
       ['মোট খরচ', formatTaka(r.total_expense_paisa, { symbol: false })],
-      ['Net profit', formatTaka(r.net_profit_paisa, { symbol: false })],
+      ['নিট মুনাফা', formatTaka(r.net_profit_paisa, { symbol: false })],
       ['নতুন বাকি', formatTaka(r.new_due_paisa, { symbol: false })],
       ['আদায় করা বাকি', formatTaka(r.collected_due_paisa, { symbol: false })],
       ['বর্তমান মোট পাওনা', formatTaka(r.current_total_due_paisa, { symbol: false })],
@@ -143,9 +148,12 @@ function Monthly() {
         <div>
           <LineRow label="মাসের মোট বিক্রয়" value={formatTaka(r.total_sales_paisa)} />
           <LineRow label="মোট ক্রয়মূল্য" value={formatTaka(r.purchase_cost_paisa)} />
-          <LineRow label="Gross profit" value={formatTaka(r.gross_profit_paisa)} />
+          {r.return_refund_paisa > 0 && (
+            <LineRow label="রিটার্নে ফেরত" value={formatTaka(r.return_refund_paisa)} tone="danger" />
+          )}
+          <LineRow label="মোট মুনাফা (দোকান খরচ বাদে)" value={formatTaka(r.gross_profit_paisa)} />
           <LineRow label="মোট খরচ" value={formatTaka(r.total_expense_paisa)} tone="danger" />
-          <LineRow label="Net profit" value={formatTaka(r.net_profit_paisa)}
+          <LineRow label="নিট মুনাফা" value={formatTaka(r.net_profit_paisa)}
             tone={r.net_profit_paisa >= 0 ? 'success' : 'danger'} />
           <LineRow label="নতুন বাকি" value={formatTaka(r.new_due_paisa)} tone="alert" />
           <LineRow label="আদায় করা বাকি" value={formatTaka(r.collected_due_paisa)} tone="success" />

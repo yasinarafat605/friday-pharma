@@ -3,9 +3,10 @@
 // অ্যাপের ডেটা স্তর — সম্পূর্ণ local (IndexedDB via Dexie)।
 // সব ব্যবসায়িক নিয়ম ও আর্থিক হিসাব এখানে transaction-এ enforce হয় (Section ১৮)।
 import {
-  db, uuid, nowISO, todayISO, newClientTxnId, newTxnNo, audit, ensureSeeded, getSettings,
+  db, uuid, nowISO, todayISO, localDateOf, newClientTxnId, newTxnNo, audit, ensureSeeded, getSettings,
 } from '@/lib/db/local';
 import { isExpired, thresholdFor } from '@/lib/business-rules';
+import { toBanglaDigits } from '@/lib/money';
 import type {
   StockRow, Customer, SaleItemInput, AdjustmentReason, Medicine, MedicineBatch,
   MedicineType, UnitType, AppSettings, ExpenseCategory, Expense,
@@ -13,8 +14,9 @@ import type {
   ExpenseSource,
 } from '@/types/db';
 
+/** সংরক্ষিত ISO সময় → স্থানীয় দিনপঞ্জির তারিখ (দিন শুরু হয় স্থানীয় মধ্যরাতে)। */
 function dateOf(iso: string): string {
-  return iso.slice(0, 10);
+  return localDateOf(iso);
 }
 function sum(xs: number[]): number {
   return xs.reduce((a, b) => a + (b || 0), 0);
@@ -135,6 +137,9 @@ export interface DashboardStats {
   todayDuePaisa: number;
   todayCollectionPaisa: number;
   todayExpensePaisa: number;
+  /** বিক্রয় − বিক্রীত মালের ক্রয়মূল্য (রিটার্ন বাদ দিয়ে)। */
+  todayGrossProfitPaisa: number;
+  /** মোট লাভ − আজকের খরচ। */
   todayProfitPaisa: number;
   totalDuePaisa: number;
   stockValuePaisa: number;
@@ -153,15 +158,24 @@ export async function fetchDashboardStats(): Promise<DashboardStats> {
     d.customers.toArray(),
     fetchStockRows(),
   ]);
-  const todaySales = sum(sales.map((s) => s.total_paisa));
+  const saleIds = new Set(sales.map((s) => s.id));
+  const [items, ret] = await Promise.all([
+    d.sale_items.filter((i) => saleIds.has(i.sale_id)).toArray(),
+    returnTotals((dt) => dt === today),
+  ]);
+  const todaySales = sum(sales.map((s) => s.total_paisa)) - ret.value_paisa;
   const todayExpense = sum(expenses.map((e) => e.amount_paisa));
+  // লাভ = বিক্রয়মূল্য − বিক্রীত মালের ক্রয়মূল্য। আগে ক্রয়মূল্য বাদ যেত না, তাই লাভ অনেক বেশি দেখাত।
+  const grossProfit = sum(items.map((i) => i.line_total_paisa - Math.round(i.cost_price_paisa * i.qty)))
+    - (ret.value_paisa - ret.restocked_cost_paisa);
   return {
     todaySalesPaisa: todaySales,
     todayCashPaisa: sum(sales.map((s) => s.cash_paid_paisa)),
     todayDuePaisa: sum(sales.map((s) => s.due_paisa)),
     todayCollectionPaisa: sum(payments.map((p) => p.amount_paisa)),
     todayExpensePaisa: todayExpense,
-    todayProfitPaisa: todaySales - todayExpense,
+    todayGrossProfitPaisa: grossProfit,
+    todayProfitPaisa: grossProfit - todayExpense,
     totalDuePaisa: sum(customers.map((c) => c.current_due_paisa)),
     stockValuePaisa: sum(rows.map((r) => Math.round(r.qty_in_stock * r.purchase_price_paisa))),
     lowStockCount: rows.filter((r) => r.stock_status === 'low' || r.stock_status === 'out').length,
@@ -364,7 +378,7 @@ export async function createSale(input: {
           throw new Error(`মেয়াদোত্তীর্ণ ওষুধ বিক্রি করা যাবে না (ব্যাচ ${batch.batch_no ?? '—'})`);
         }
         if (batch.qty_in_stock < it.qty) {
-          throw new Error(`স্টকে যথেষ্ট নেই (আছে ${batch.qty_in_stock}, চাওয়া ${it.qty})`);
+          throw new Error(`স্টকে যথেষ্ট নেই (আছে ${toBanglaDigits(batch.qty_in_stock)}, চাওয়া ${toBanglaDigits(it.qty)})`);
         }
         const line = Math.round(it.unit_price_paisa * it.qty);
         subtotal += line;
@@ -611,7 +625,8 @@ export async function createSaleReturn(input: {
         if (reduce > 0) {
           await d.customer_ledger.add({
             id: uuid(), customer_id: sale.customer_id, entry_type: 'return_adjust',
-            amount_paisa: -reduce, ref_sale_id: input.sale_id, note: 'বিক্রয় রিটার্ন', entry_date: nowISO(),
+            amount_paisa: -reduce, ref_sale_id: input.sale_id, ref_return_id: retId,
+            note: 'বিক্রয় রিটার্ন', entry_date: nowISO(),
           });
           await recomputeCustomerDue(sale.customer_id);
         }
@@ -668,10 +683,43 @@ export async function saveCashSession(input: {
 // ============================================================
 // REPORTS
 // ============================================================
+
+export interface ReturnTotals {
+  /** ফেরত যাওয়া বিক্রয়মূল্য — বিক্রয় থেকে বাদ যাবে। */
+  value_paisa: number;
+  /** ফেরত এসে স্টকে ঢোকা মালের ক্রয়মূল্য — লাভের হিসাব থেকে বাদ যাবে। */
+  restocked_cost_paisa: number;
+  /** গ্রাহককে ফেরত দেওয়া টাকা। */
+  refund_paisa: number;
+}
+
+/** নির্দিষ্ট সময়ের সক্রিয় (বাতিল নয়) রিটার্নের হিসাব। */
+async function returnTotals(inRange: (d: string) => boolean): Promise<ReturnTotals> {
+  const d = db();
+  const rets = (await d.sale_returns.toArray()).filter((r) => isActive(r) && inRange(r.return_date));
+  if (rets.length === 0) return { value_paisa: 0, restocked_cost_paisa: 0, refund_paisa: 0 };
+  const retIds = new Set(rets.map((r) => r.id));
+  const items = (await d.sale_return_items.toArray()).filter((i) => retIds.has(i.return_id));
+  const saleItems = await d.sale_items.bulkGet(items.map((i) => i.sale_item_id));
+  let value = 0, cost = 0;
+  items.forEach((it, idx) => {
+    const si = saleItems[idx];
+    if (!si) return;
+    value += Math.round(si.unit_price_paisa * it.qty);
+    if (it.restock) cost += Math.round(si.cost_price_paisa * it.qty);
+  });
+  return {
+    value_paisa: value,
+    restocked_cost_paisa: cost,
+    refund_paisa: sum(rets.map((r) => r.refund_paisa)),
+  };
+}
 export interface DailyReport {
   total_sales_paisa: number; cash_sales_paisa: number; due_sales_paisa: number;
   collection_paisa: number; expense_paisa: number; gross_profit_paisa: number;
   net_profit_paisa: number; stock_purchase_paisa: number;
+  /** ফেরত দেওয়া টাকা — বিক্রয় ও লাভ থেকে বাদ দেওয়া হয়েছে। */
+  return_refund_paisa: number;
 }
 export async function fetchDailyReport(date: string): Promise<DailyReport> {
   const d = db();
@@ -683,10 +731,13 @@ export async function fetchDailyReport(date: string): Promise<DailyReport> {
     d.stock_entries.filter((e) => isActive(e) && e.entry_date === date).toArray(),
     d.sale_items.filter((i) => saleIds.has(i.sale_id)).toArray(),
   ]);
-  const gross = sum(allItems.map((i) => i.line_total_paisa - Math.round(i.cost_price_paisa * i.qty)));
+  const ret = await returnTotals((dt) => dt === date);
+  // রিটার্নে বিক্রয় কমে, আর ফেরত আসা মাল স্টকে ফিরলে তার ক্রয়মূল্যও লাভের হিসাব থেকে বাদ যায়।
+  const gross = sum(allItems.map((i) => i.line_total_paisa - Math.round(i.cost_price_paisa * i.qty)))
+    - (ret.value_paisa - ret.restocked_cost_paisa);
   const expense = sum(expenses.map((e) => e.amount_paisa));
   return {
-    total_sales_paisa: sum(sales.map((s) => s.total_paisa)),
+    total_sales_paisa: sum(sales.map((s) => s.total_paisa)) - ret.value_paisa,
     cash_sales_paisa: sum(sales.map((s) => s.cash_paid_paisa)),
     due_sales_paisa: sum(sales.map((s) => s.due_paisa)),
     collection_paisa: sum(payments.map((p) => p.amount_paisa)),
@@ -694,6 +745,7 @@ export async function fetchDailyReport(date: string): Promise<DailyReport> {
     gross_profit_paisa: gross,
     net_profit_paisa: gross - expense,
     stock_purchase_paisa: sum(entries.map((e) => Math.round(e.qty * e.purchase_price_paisa))),
+    return_refund_paisa: ret.refund_paisa,
   };
 }
 
@@ -701,22 +753,26 @@ export interface MonthlyReport {
   total_sales_paisa: number; purchase_cost_paisa: number; gross_profit_paisa: number;
   total_expense_paisa: number; net_profit_paisa: number; new_due_paisa: number;
   collected_due_paisa: number; current_total_due_paisa: number;
+  return_refund_paisa: number;
   expense_by_category: Record<string, number>;
 }
 export async function fetchMonthlyReport(year: number, month: number): Promise<MonthlyReport> {
   const d = db();
   const start = `${year}-${String(month).padStart(2, '0')}-01`;
-  const endDate = new Date(year, month, 1); // month is 1-based → next month
-  const end = endDate.toISOString().slice(0, 10);
+  // পরের মাসের ১ তারিখ, স্ট্রিং হিসেবেই তৈরি — timezone রূপান্তরে মাসের শেষ দিন যেন বাদ না পড়ে।
+  const nextYear = month === 12 ? year + 1 : year;
+  const nextMonth = month === 12 ? 1 : month + 1;
+  const end = `${nextYear}-${String(nextMonth).padStart(2, '0')}-01`;
   const inRange = (dt: string) => dt >= start && dt < end;
 
   const sales = await d.sales.filter((s) => s.status === 'completed' && inRange(dateOf(s.sale_date))).toArray();
   const saleIds = new Set(sales.map((s) => s.id));
-  const [items, entries, expenses, ledger, payments, customers, cats] = await Promise.all([
+  const [items, entries, expenses, ledger, ret, payments, customers, cats] = await Promise.all([
     d.sale_items.filter((i) => saleIds.has(i.sale_id)).toArray(),
     d.stock_entries.filter((e) => isActive(e) && inRange(e.entry_date)).toArray(),
     d.expenses.filter((e) => e.status === 'completed' && inRange(e.expense_date)).toArray(),
     d.customer_ledger.filter((l) => l.entry_type === 'sale_due' && inRange(dateOf(l.entry_date))).toArray(),
+    returnTotals(inRange),
     d.due_payments.filter((p) => p.status === 'completed' && inRange(p.pay_date)).toArray(),
     d.customers.toArray(),
     d.expense_categories.toArray(),
@@ -727,17 +783,20 @@ export async function fetchMonthlyReport(year: number, month: number): Promise<M
     const k = catMap.get(e.category_id) ?? 'অন্যান্য';
     byCat[k] = (byCat[k] ?? 0) + e.amount_paisa;
   }
-  const gross = sum(items.map((i) => i.line_total_paisa - Math.round(i.cost_price_paisa * i.qty)));
+  const gross = sum(items.map((i) => i.line_total_paisa - Math.round(i.cost_price_paisa * i.qty)))
+    - (ret.value_paisa - ret.restocked_cost_paisa);
   const expense = sum(expenses.map((e) => e.amount_paisa));
   return {
-    total_sales_paisa: sum(sales.map((s) => s.total_paisa)),
+    total_sales_paisa: sum(sales.map((s) => s.total_paisa)) - ret.value_paisa,
     purchase_cost_paisa: sum(entries.map((e) => Math.round(e.qty * e.purchase_price_paisa))),
     gross_profit_paisa: gross,
     total_expense_paisa: expense,
     net_profit_paisa: gross - expense,
-    new_due_paisa: sum(ledger.map((l) => l.amount_paisa)),
+    // বাতিল বিক্রয়ের বাকি বাদ — শুধু সক্রিয় বিক্রয়ের বাকি গোনা হয়।
+    new_due_paisa: sum(ledger.filter((l) => l.ref_sale_id && saleIds.has(l.ref_sale_id)).map((l) => l.amount_paisa)),
     collected_due_paisa: sum(payments.map((p) => p.amount_paisa)),
     current_total_due_paisa: sum(customers.map((c) => c.current_due_paisa)),
+    return_refund_paisa: ret.refund_paisa,
     expense_by_category: byCat,
   };
 }
@@ -955,7 +1014,9 @@ export async function cancelDuePayment(paymentId: string, reason: string): Promi
       });
     }
     await recomputeCustomerDue(pay.customer_id);
-    await d.due_payments.put({ ...pay, status: 'cancelled', note: reason.trim() });
+    // আসল নোট মুছে যায় না — বাতিলের কারণ শেষে যোগ হয়।
+    const note = [pay.note, `বাতিল: ${reason.trim()}`].filter(Boolean).join(' — ');
+    await d.due_payments.put({ ...pay, status: 'cancelled', note });
     await audit('due_payment', paymentId, 'cancel', { reason: reason.trim() }, pay);
   });
 }
@@ -1093,13 +1154,20 @@ export async function updateStockEntry(id: string, patch: {
     if (!batch) throw new Error('batch পাওয়া যায়নি');
     const delta = qty - cur.qty;
     if (batch.qty_in_stock + delta < 0) {
-      throw new Error(`স্টকে আছে ${batch.qty_in_stock} — এত কমানো যাবে না, কিছু আগেই বিক্রি হয়েছে`);
+      throw new Error(`স্টকে আছে ${toBanglaDigits(batch.qty_in_stock)} — এত কমানো যাবে না, কিছু আগেই বিক্রি হয়েছে`);
     }
+    // batch-এর চলতি দাম ঠিক করে সবচেয়ে নতুন সক্রিয় এন্ট্রি। পুরোনো এন্ট্রি সংশোধন করলে
+    // চলতি দাম বদলানো উচিত নয়, নইলে নতুন দাম হারিয়ে যায়।
+    const siblings = (await d.stock_entries.where('batch_id').equals(cur.batch_id).toArray())
+      .filter((e) => isActive(e));
+    const newest = siblings.reduce<StockEntry | null>(
+      (a, b) => (!a || b.created_at > a.created_at ? b : a), null);
+    const setsBatchPrice = !newest || newest.id === cur.id;
     await d.batches.put({
       ...batch,
       qty_in_stock: batch.qty_in_stock + delta,
-      purchase_price_paisa: Math.round(purchase),
-      sale_price_paisa: Math.round(sale),
+      purchase_price_paisa: setsBatchPrice ? Math.round(purchase) : batch.purchase_price_paisa,
+      sale_price_paisa: setsBatchPrice ? Math.round(sale) : batch.sale_price_paisa,
     });
     const next: StockEntry = {
       ...cur, ...patch,
@@ -1121,7 +1189,7 @@ export async function cancelStockEntry(id: string, reason: string): Promise<void
     const batch = await d.batches.get(cur.batch_id);
     if (!batch) throw new Error('batch পাওয়া যায়নি');
     if (batch.qty_in_stock < cur.qty) {
-      throw new Error(`স্টকে আছে ${batch.qty_in_stock}, এন্ট্রি ছিল ${cur.qty} — কিছু আগেই বিক্রি হয়েছে, বাতিল করা যাবে না`);
+      throw new Error(`স্টকে আছে ${toBanglaDigits(batch.qty_in_stock)}, এন্ট্রি ছিল ${toBanglaDigits(cur.qty)} — কিছু আগেই বিক্রি হয়েছে, বাতিল করা যাবে না`);
     }
     await d.batches.put({ ...batch, qty_in_stock: batch.qty_in_stock - cur.qty });
     await d.stock_entries.put({ ...cur, status: 'cancelled', cancelled_reason: reason.trim() });
@@ -1215,15 +1283,29 @@ export async function cancelSaleReturn(id: string, reason: string): Promise<void
       }
       const sale = await d.sales.get(cur.sale_id);
       if (sale?.customer_id) {
-        const ledger = await d.customer_ledger
+        // শুধু এই রিটার্নের এন্ট্রিগুলো — একই বিক্রয়ে একাধিক রিটার্ন থাকলেও অন্যগুলো অক্ষত থাকে।
+        let ledger = await d.customer_ledger
           .where('customer_id').equals(sale.customer_id)
-          .filter((l) => l.ref_sale_id === cur.sale_id && l.entry_type === 'return_adjust' && l.note === 'বিক্রয় রিটার্ন')
+          .filter((l) => l.ref_return_id === id)
           .toArray();
+        if (ledger.length === 0) {
+          // পুরোনো রেকর্ডে ref_return_id নেই। তখন কেবল একটিমাত্র রিটার্ন থাকলে নিরাপদে চেনা যায়।
+          const allReturns = await d.sale_returns.where('sale_id').equals(cur.sale_id).toArray();
+          if (allReturns.length > 1) {
+            throw new Error('এই পুরোনো রিটার্নটি নিরাপদে বাতিল করা যাচ্ছে না — একই বিক্রয়ে একাধিক রিটার্ন আছে। বাকির অঙ্ক পাওনাদার পেজ থেকে ঠিক করুন।');
+          }
+          ledger = await d.customer_ledger
+            .where('customer_id').equals(sale.customer_id)
+            .filter((l) => l.ref_sale_id === cur.sale_id
+              && l.entry_type === 'return_adjust'
+              && l.note === 'বিক্রয় রিটার্ন')
+            .toArray();
+        }
         const reverse = sum(ledger.map((l) => l.amount_paisa));
         if (reverse !== 0) {
           await d.customer_ledger.add({
             id: uuid(), customer_id: sale.customer_id, entry_type: 'return_adjust',
-            amount_paisa: -reverse, ref_sale_id: cur.sale_id,
+            amount_paisa: -reverse, ref_sale_id: cur.sale_id, ref_return_id: id,
             note: 'রিটার্ন বাতিল', entry_date: nowISO(),
           });
           await recomputeCustomerDue(sale.customer_id);

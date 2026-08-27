@@ -7,6 +7,7 @@ import {
   isValidPinFormat, lockRemainingMs, PIN_LENGTH,
 } from '@/lib/auth';
 import { ensureSeeded } from '@/lib/db/local';
+import { toBanglaDigits } from '@/lib/money';
 import { L } from '@/lib/i18n/labels';
 
 type Mode = 'loading' | 'setup' | 'enter' | 'reset';
@@ -34,7 +35,7 @@ export default function LoginPage() {
 
   async function onSetup(e: React.FormEvent) {
     e.preventDefault(); setError('');
-    if (!isValidPinFormat(pin)) return setError(`PIN অবশ্যই ${PIN_LENGTH} সংখ্যার হতে হবে`);
+    if (!isValidPinFormat(pin)) return setError(`PIN অবশ্যই ${toBanglaDigits(PIN_LENGTH)} সংখ্যার হতে হবে`);
     if (pin !== confirm) return setError('দুবার একই PIN দিন');
     setBusy(true);
     try { await setPin(pin); go(); }
@@ -56,7 +57,7 @@ export default function LoginPage() {
 
   async function onReset(e: React.FormEvent) {
     e.preventDefault(); setError('');
-    if (!isValidPinFormat(pin)) return setError(`নতুন PIN অবশ্যই ${PIN_LENGTH} সংখ্যার হতে হবে`);
+    if (!isValidPinFormat(pin)) return setError(`নতুন PIN অবশ্যই ${toBanglaDigits(PIN_LENGTH)} সংখ্যার হতে হবে`);
     if (pin !== confirm) return setError('দুবার একই নতুন PIN দিন');
     setBusy(true);
     try { await resetPinWithPhone(last4, pin); go(); }
@@ -94,7 +95,7 @@ export default function LoginPage() {
         {mode === 'setup' && (
           <form onSubmit={onSetup} className="space-y-4">
             <p className="rounded-lg bg-brand-light px-4 py-2 text-center text-sm text-brand-dark">
-              প্রথমবার — একটি {PIN_LENGTH} সংখ্যার PIN তৈরি করুন
+              প্রথমবার — একটি {toBanglaDigits(PIN_LENGTH)} সংখ্যার PIN তৈরি করুন
             </p>
             {pinInput(pin, setPinInput, 'নতুন PIN', 'pin')}
             {pinInput(confirm, setConfirm, 'PIN নিশ্চিত করুন', 'confirm')}

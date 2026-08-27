@@ -38,8 +38,7 @@ export default function MedicinesPage() {
       if (tab === 'active' && !m.is_active) return false;
       if (tab === 'inactive' && m.is_active) return false;
       if (!s) return true;
-      return m.name.toLowerCase().includes(s)
-        || (m.strength ?? '').toLowerCase().includes(s)
+      return `${m.name} ${m.strength ?? ''}`.toLowerCase().includes(s)
         || (m.bn_name ?? '').toLowerCase().includes(s)
         || (m.generic_name ?? '').toLowerCase().includes(s)
         || (m.company ?? '').toLowerCase().includes(s);
