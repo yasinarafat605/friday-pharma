@@ -9,6 +9,8 @@ import { isExpired, thresholdFor } from '@/lib/business-rules';
 import type {
   StockRow, Customer, SaleItemInput, AdjustmentReason, Medicine, MedicineBatch,
   MedicineType, UnitType, AppSettings, ExpenseCategory, Expense,
+  CustomerLedger, DuePayment, StockEntry, StockAdjustment, SaleReturn,
+  ExpenseSource,
 } from '@/types/db';
 
 function dateOf(iso: string): string {
@@ -16,6 +18,10 @@ function dateOf(iso: string): string {
 }
 function sum(xs: number[]): number {
   return xs.reduce((a, b) => a + (b || 0), 0);
+}
+/** পুরোনো রেকর্ডে status নেই — সেগুলো completed ধরা হয়। */
+function isActive(row: { status?: string }): boolean {
+  return (row.status ?? 'completed') !== 'cancelled';
 }
 
 // ============================================================
@@ -286,20 +292,30 @@ export async function updateBatch(batchId: string, patch: {
 
 export async function upsertCustomer(input: {
   name: string; phone?: string | null; village?: string | null; note?: string | null;
+  /** অ্যাপ ব্যবহারের আগের পুরোনো বকেয়া, ঐচ্ছিক। */
+  opening_due_paisa?: number;
 }): Promise<Customer> {
   if (!input.name?.trim()) throw new Error('নাম দিন');
+  const opening = Math.round(input.opening_due_paisa ?? 0);
+  if (opening < 0) throw new Error('পূর্বের বকেয়া negative হতে পারবে না');
   const c: Customer = {
     id: uuid(),
     name: input.name.trim(),
     phone: input.phone ?? null,
     village: input.village ?? null,
     note: input.note ?? null,
-    first_due_date: null,
+    first_due_date: opening > 0 ? todayISO() : null,
     last_txn_date: null,
-    current_due_paisa: 0,
+    current_due_paisa: opening,
   };
   await db().customers.add(c);
-  await audit('customer', c.id, 'create', { name: c.name });
+  if (opening > 0) {
+    await db().customer_ledger.add({
+      id: uuid(), customer_id: c.id, entry_type: 'opening',
+      amount_paisa: opening, note: 'অ্যাপ শুরুর আগের বকেয়া', entry_date: nowISO(),
+    });
+  }
+  await audit('customer', c.id, 'create', { name: c.name, opening_due_paisa: opening });
   return c;
 }
 
@@ -453,7 +469,7 @@ export async function addStock(input: {
       id: entryId, client_txn_id: newClientTxnId('stock'), batch_id: batchId, qty: input.qty,
       purchase_price_paisa: input.purchase_price_paisa, sale_price_paisa: input.sale_price_paisa,
       entry_date: input.entry_date, invoice_no: input.invoice_no ?? null, note: input.note ?? null,
-      created_at: nowISO(),
+      created_at: nowISO(), status: 'completed',
     });
     await audit('stock_entry', entryId, 'create', { batch_id: batchId, qty: input.qty });
     return { entry_id: entryId, batch_id: batchId };
@@ -496,7 +512,7 @@ export async function adjustStock(input: {
     const id = uuid();
     await d.stock_adjustments.add({
       id, client_txn_id: newClientTxnId('adj'), batch_id: input.batch_id, qty: input.qty,
-      reason: input.reason, note: input.note ?? null, adjusted_at: nowISO(),
+      reason: input.reason, note: input.note ?? null, adjusted_at: nowISO(), status: 'completed',
     });
     await audit('stock_adjustment', id, 'create', { qty: input.qty, reason: input.reason });
     return { adjustment_id: id };
@@ -553,7 +569,7 @@ export async function createSaleReturn(input: {
       await d.sale_returns.add({
         id: retId, client_txn_id: newClientTxnId('ret'), sale_id: input.sale_id,
         return_date: todayISO(), refund_paisa: Math.max(0, Math.round(input.refund_paisa || 0)),
-        reason: input.reason, created_at: nowISO(),
+        reason: input.reason, created_at: nowISO(), status: 'completed',
       });
 
       let returnedValue = 0;
@@ -605,7 +621,7 @@ export async function fetchCashSummary(date: string): Promise<CashSummary> {
     d.sales.filter((s) => s.status === 'completed' && dateOf(s.sale_date) === date).toArray(),
     d.due_payments.filter((p) => p.status === 'completed' && p.method === 'cash' && p.pay_date === date).toArray(),
     d.expenses.filter((e) => e.status === 'completed' && e.payment_source === 'cash' && e.expense_date === date).toArray(),
-    d.stock_entries.filter((e) => e.entry_date === date).toArray(),
+    d.stock_entries.filter((e) => isActive(e) && e.entry_date === date).toArray(),
   ]);
   const opening = session?.opening_cash_paisa ?? 0;
   const cashSales = sum(sales.map((s) => s.cash_paid_paisa));
@@ -649,7 +665,7 @@ export async function fetchDailyReport(date: string): Promise<DailyReport> {
   const [payments, expenses, entries, allItems] = await Promise.all([
     d.due_payments.filter((p) => p.status === 'completed' && p.pay_date === date).toArray(),
     d.expenses.filter((e) => e.status === 'completed' && e.expense_date === date).toArray(),
-    d.stock_entries.filter((e) => e.entry_date === date).toArray(),
+    d.stock_entries.filter((e) => isActive(e) && e.entry_date === date).toArray(),
     d.sale_items.filter((i) => saleIds.has(i.sale_id)).toArray(),
   ]);
   const gross = sum(allItems.map((i) => i.line_total_paisa - Math.round(i.cost_price_paisa * i.qty)));
@@ -683,7 +699,7 @@ export async function fetchMonthlyReport(year: number, month: number): Promise<M
   const saleIds = new Set(sales.map((s) => s.id));
   const [items, entries, expenses, ledger, payments, customers, cats] = await Promise.all([
     d.sale_items.filter((i) => saleIds.has(i.sale_id)).toArray(),
-    d.stock_entries.filter((e) => inRange(e.entry_date)).toArray(),
+    d.stock_entries.filter((e) => isActive(e) && inRange(e.entry_date)).toArray(),
     d.expenses.filter((e) => e.status === 'completed' && inRange(e.expense_date)).toArray(),
     d.customer_ledger.filter((l) => l.entry_type === 'sale_due' && inRange(dateOf(l.entry_date))).toArray(),
     d.due_payments.filter((p) => p.status === 'completed' && inRange(p.pay_date)).toArray(),
@@ -725,6 +741,533 @@ export async function fetchInventoryReport(): Promise<InventoryReport> {
     expiredCount: rows.filter((r) => r.expiry_status === 'expired').length,
     stockValuePaisa: rows.reduce((a, r) => a + Math.round(r.qty_in_stock * r.purchase_price_paisa), 0),
   };
+}
+
+
+// ============================================================
+// পাওনাদার — ledger, সংশোধন, পূর্বের বকেয়া, মুছে ফেলা
+// ============================================================
+
+export interface LedgerRow extends CustomerLedger {
+  label: string;
+}
+
+const LEDGER_LABEL: Record<string, string> = {
+  opening: 'পূর্বের বকেয়া',
+  sale_due: 'বাকিতে বিক্রয়',
+  payment: 'বাকি আদায়',
+  return_adjust: 'রিটার্ন সমন্বয়',
+};
+
+/** এক পাওনাদারের সম্পূর্ণ খতিয়ান, নতুন এন্ট্রি আগে। */
+export async function fetchCustomerLedger(customerId: string): Promise<LedgerRow[]> {
+  const rows = await db().customer_ledger.where('customer_id').equals(customerId).toArray();
+  rows.sort((a, b) => b.entry_date.localeCompare(a.entry_date));
+  return rows.map((r) => ({ ...r, label: LEDGER_LABEL[r.entry_type] ?? r.entry_type }));
+}
+
+/** পাওনাদারের তথ্য সংশোধন (বাকির অঙ্ক এখানে বদলায় না)। */
+export async function updateCustomer(id: string, patch: {
+  name?: string; phone?: string | null; village?: string | null; note?: string | null;
+}): Promise<Customer> {
+  const d = db();
+  const cur = await d.customers.get(id);
+  if (!cur) throw new Error('পাওনাদার পাওয়া যায়নি');
+  const name = (patch.name ?? cur.name).trim();
+  if (!name) throw new Error('নাম দিন');
+  const next: Customer = { ...cur, ...patch, name };
+  await d.customers.put(next);
+  await audit('customer', id, 'update', next, cur);
+  return next;
+}
+
+/**
+ * অ্যাপ ব্যবহারের আগের পুরোনো বকেয়া বসানো বা সংশোধন।
+ * প্রতি পাওনাদারে একটিই "পূর্বের বকেয়া" এন্ট্রি থাকে; ০ দিলে সেটি সরে যায়।
+ */
+export async function setCustomerOpeningDue(customerId: string, amountPaisa: number): Promise<void> {
+  const d = db();
+  const amount = Math.round(amountPaisa || 0);
+  if (amount < 0) throw new Error('পূর্বের বকেয়া negative হতে পারবে না');
+  await d.transaction('rw', [d.customers, d.customer_ledger, d.audit_logs], async () => {
+    const c = await d.customers.get(customerId);
+    if (!c) throw new Error('পাওনাদার পাওয়া যায়নি');
+    const existing = await d.customer_ledger
+      .where('customer_id').equals(customerId)
+      .filter((l) => l.entry_type === 'opening')
+      .first();
+    const before = existing?.amount_paisa ?? 0;
+    if (existing) {
+      if (amount === 0) await d.customer_ledger.delete(existing.id);
+      else await d.customer_ledger.put({ ...existing, amount_paisa: amount });
+    } else if (amount > 0) {
+      await d.customer_ledger.add({
+        id: uuid(), customer_id: customerId, entry_type: 'opening',
+        amount_paisa: amount, note: 'অ্যাপ শুরুর আগের বকেয়া', entry_date: nowISO(),
+      });
+    }
+    if (amount > 0 && !c.first_due_date) {
+      await d.customers.put({ ...c, first_due_date: todayISO() });
+    }
+    await recomputeCustomerDue(customerId);
+    await audit('customer', customerId, 'opening_due', { amount_paisa: amount }, { amount_paisa: before });
+  });
+}
+
+/** কোনো লেনদেন না থাকলে পাওনাদার সম্পূর্ণ মুছে ফেলা যায়। */
+export async function deleteCustomer(id: string): Promise<void> {
+  const d = db();
+  await d.transaction('rw', [d.customers, d.customer_ledger, d.sales, d.due_payments, d.audit_logs], async () => {
+    const c = await d.customers.get(id);
+    if (!c) throw new Error('পাওনাদার পাওয়া যায়নি');
+    const saleCount = await d.sales.filter((x) => x.customer_id === id).count();
+    if (saleCount > 0) throw new Error('এই পাওনাদারের বিক্রয় আছে, মুছে ফেলা যাবে না');
+    const payCount = await d.due_payments.where('customer_id').equals(id).count();
+    if (payCount > 0) throw new Error('এই পাওনাদারের আদায়ের রেকর্ড আছে, মুছে ফেলা যাবে না');
+    const ledger = await d.customer_ledger.where('customer_id').equals(id).toArray();
+    const other = ledger.filter((l) => l.entry_type !== 'opening');
+    if (other.length > 0) throw new Error('এই পাওনাদারের খতিয়ান আছে, মুছে ফেলা যাবে না');
+    for (const l of ledger) await d.customer_ledger.delete(l.id);
+    await d.customers.delete(id);
+    await audit('customer', id, 'delete', null, c);
+  });
+}
+
+// ============================================================
+// বিক্রয় বাতিল — স্টক, বাকি ও ক্যাশ সবই ফিরে যায়
+// ============================================================
+
+export interface SaleHistoryRow {
+  id: string; txn_no: string; sale_date: string; total_paisa: number;
+  cash_paid_paisa: number; due_paisa: number; discount_paisa: number;
+  payment_type: string; status: string; cancelled_reason?: string | null;
+  customer_id: string | null; customer_name: string | null;
+}
+
+/** বিক্রয়ের তালিকা; বাতিল করা বিক্রয়ও দেখানো যায়। */
+export async function fetchSalesHistory(
+  limit = 50, includeCancelled = true,
+): Promise<SaleHistoryRow[]> {
+  const d = db();
+  const [sales, customers] = await Promise.all([d.sales.toArray(), d.customers.toArray()]);
+  const nameOf = new Map(customers.map((c) => [c.id, c.name]));
+  const rows = sales.filter((s) => includeCancelled || s.status === 'completed');
+  rows.sort((a, b) => b.sale_date.localeCompare(a.sale_date));
+  return rows.slice(0, limit).map((s) => ({
+    id: s.id, txn_no: s.txn_no, sale_date: s.sale_date, total_paisa: s.total_paisa,
+    cash_paid_paisa: s.cash_paid_paisa, due_paisa: s.due_paisa, discount_paisa: s.discount_paisa,
+    payment_type: s.payment_type, status: s.status, cancelled_reason: s.cancelled_reason,
+    customer_id: s.customer_id ?? null, customer_name: s.customer_id ? (nameOf.get(s.customer_id) ?? null) : null,
+  }));
+}
+
+/**
+ * বিক্রয় বাতিল। স্টক ফেরত যায়, বাকির খতিয়ান উল্টে যায়, রেকর্ড "বাতিল" হিসেবে থাকে।
+ * রিটার্ন থাকা বিক্রয় আগে রিটার্ন বাতিল না করলে বাতিল হয় না।
+ */
+export async function cancelSale(saleId: string, reason: string): Promise<void> {
+  const d = db();
+  if (!reason.trim()) throw new Error('বাতিলের কারণ লিখুন');
+  await d.transaction('rw',
+    [d.sales, d.sale_items, d.batches, d.customers, d.customer_ledger, d.sale_returns, d.audit_logs],
+    async () => {
+      const sale = await d.sales.get(saleId);
+      if (!sale) throw new Error('বিক্রয় পাওয়া যায়নি');
+      if (sale.status === 'cancelled') throw new Error('এই বিক্রয় আগেই বাতিল হয়েছে');
+      const returns = await d.sale_returns.where('sale_id').equals(saleId).toArray();
+      if (returns.some(isActive)) {
+        throw new Error('এই বিক্রয়ে রিটার্ন আছে — আগে রিটার্ন বাতিল করুন');
+      }
+      const items = await d.sale_items.where('sale_id').equals(saleId).toArray();
+      for (const it of items) {
+        const b = await d.batches.get(it.batch_id);
+        if (b) await d.batches.put({ ...b, qty_in_stock: b.qty_in_stock + it.qty });
+      }
+      if (sale.customer_id) {
+        const ledger = await d.customer_ledger
+          .where('customer_id').equals(sale.customer_id)
+          .filter((l) => l.ref_sale_id === saleId)
+          .toArray();
+        const reverse = sum(ledger.map((l) => l.amount_paisa));
+        if (reverse !== 0) {
+          await d.customer_ledger.add({
+            id: uuid(), customer_id: sale.customer_id, entry_type: 'return_adjust',
+            amount_paisa: -reverse, ref_sale_id: saleId,
+            note: 'বিক্রয় বাতিল', entry_date: nowISO(),
+          });
+        }
+        await recomputeCustomerDue(sale.customer_id);
+      }
+      await d.sales.put({ ...sale, status: 'cancelled', cancelled_reason: reason.trim() });
+      await audit('sale', saleId, 'cancel', { reason: reason.trim() }, sale);
+    });
+}
+
+// ============================================================
+// বাকি আদায় বাতিল
+// ============================================================
+
+export interface DuePaymentRow extends DuePayment {
+  customer_name: string | null;
+}
+
+export async function fetchRecentDuePayments(limit = 50): Promise<DuePaymentRow[]> {
+  const d = db();
+  const [pays, customers] = await Promise.all([d.due_payments.toArray(), d.customers.toArray()]);
+  const nameOf = new Map(customers.map((c) => [c.id, c.name]));
+  pays.sort((a, b) => b.pay_date.localeCompare(a.pay_date));
+  return pays.slice(0, limit).map((p) => ({ ...p, customer_name: nameOf.get(p.customer_id) ?? null }));
+}
+
+/** আদায় বাতিল — টাকা আবার বাকিতে যোগ হয়। */
+export async function cancelDuePayment(paymentId: string, reason: string): Promise<void> {
+  const d = db();
+  if (!reason.trim()) throw new Error('বাতিলের কারণ লিখুন');
+  await d.transaction('rw', [d.due_payments, d.customer_ledger, d.customers, d.audit_logs], async () => {
+    const pay = await d.due_payments.get(paymentId);
+    if (!pay) throw new Error('আদায়ের রেকর্ড পাওয়া যায়নি');
+    if (pay.status === 'cancelled') throw new Error('এই আদায় আগেই বাতিল হয়েছে');
+    const ledger = await d.customer_ledger
+      .where('customer_id').equals(pay.customer_id)
+      .filter((l) => l.ref_payment_id === paymentId)
+      .toArray();
+    const reverse = sum(ledger.map((l) => l.amount_paisa));
+    if (reverse !== 0) {
+      await d.customer_ledger.add({
+        id: uuid(), customer_id: pay.customer_id, entry_type: 'return_adjust',
+        amount_paisa: -reverse, ref_payment_id: paymentId,
+        note: 'আদায় বাতিল', entry_date: nowISO(),
+      });
+    }
+    await recomputeCustomerDue(pay.customer_id);
+    await d.due_payments.put({ ...pay, status: 'cancelled', note: reason.trim() });
+    await audit('due_payment', paymentId, 'cancel', { reason: reason.trim() }, pay);
+  });
+}
+
+// ============================================================
+// খরচ — সংশোধন ও বাতিল
+// ============================================================
+
+export async function fetchExpenses(limit = 50): Promise<Expense[]> {
+  const all = await db().expenses.toArray();
+  all.sort((a, b) => b.expense_date.localeCompare(a.expense_date));
+  return all.slice(0, limit);
+}
+
+export async function updateExpense(id: string, patch: {
+  category_id?: string; amount_paisa?: number; expense_date?: string;
+  description?: string | null; payment_source?: ExpenseSource;
+}): Promise<Expense> {
+  const d = db();
+  const cur = await d.expenses.get(id);
+  if (!cur) throw new Error('খরচ পাওয়া যায়নি');
+  if (cur.status === 'cancelled') throw new Error('বাতিল খরচ সংশোধন করা যায় না');
+  const amount = patch.amount_paisa ?? cur.amount_paisa;
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error('পরিমাণ ০-এর বেশি হতে হবে');
+  const next: Expense = { ...cur, ...patch, amount_paisa: Math.round(amount) };
+  await d.expenses.put(next);
+  await audit('expense', id, 'update', next, cur);
+  return next;
+}
+
+export async function cancelExpense(id: string, reason: string): Promise<void> {
+  const d = db();
+  if (!reason.trim()) throw new Error('বাতিলের কারণ লিখুন');
+  const cur = await d.expenses.get(id);
+  if (!cur) throw new Error('খরচ পাওয়া যায়নি');
+  if (cur.status === 'cancelled') throw new Error('এই খরচ আগেই বাতিল হয়েছে');
+  await d.expenses.put({
+    ...cur, status: 'cancelled',
+    description: `${cur.description ?? ''}${cur.description ? ' — ' : ''}বাতিল: ${reason.trim()}`,
+  });
+  await audit('expense', id, 'cancel', { reason: reason.trim() }, cur);
+}
+
+// ---- খরচের ক্যাটাগরি ----
+export async function addExpenseCategory(input: { bn_name: string; is_recurring?: boolean }): Promise<ExpenseCategory> {
+  const d = db();
+  const bn = input.bn_name.trim();
+  if (!bn) throw new Error('ক্যাটাগরির নাম দিন');
+  const all = await d.expense_categories.toArray();
+  if (all.some((c) => c.bn_name.trim() === bn)) throw new Error('এই নামে ক্যাটাগরি আছে');
+  const maxSort = all.reduce((a, c) => Math.max(a, c.sort_order), 0);
+  const cat: ExpenseCategory = {
+    id: uuid(),
+    name: bn.replace(/\s+/g, '_').toLowerCase(),
+    bn_name: bn,
+    is_recurring: input.is_recurring ?? false,
+    sort_order: Math.min(98, maxSort + 1),
+  };
+  await d.expense_categories.add(cat);
+  await audit('expense_category', cat.id, 'create', cat);
+  return cat;
+}
+
+export async function updateExpenseCategory(id: string, patch: { bn_name?: string; is_recurring?: boolean }): Promise<void> {
+  const d = db();
+  const cur = await d.expense_categories.get(id);
+  if (!cur) throw new Error('ক্যাটাগরি পাওয়া যায়নি');
+  const bn = (patch.bn_name ?? cur.bn_name).trim();
+  if (!bn) throw new Error('ক্যাটাগরির নাম দিন');
+  const all = await d.expense_categories.toArray();
+  if (all.some((c) => c.id !== id && c.bn_name.trim() === bn)) throw new Error('এই নামে ক্যাটাগরি আছে');
+  await d.expense_categories.put({ ...cur, ...patch, bn_name: bn });
+  await audit('expense_category', id, 'update', { ...cur, ...patch, bn_name: bn }, cur);
+}
+
+/** কোনো খরচ এই ক্যাটাগরিতে না থাকলেই মুছে ফেলা যায়। */
+export async function deleteExpenseCategory(id: string): Promise<void> {
+  const d = db();
+  const cur = await d.expense_categories.get(id);
+  if (!cur) throw new Error('ক্যাটাগরি পাওয়া যায়নি');
+  const used = await d.expenses.where('category_id').equals(id).count();
+  if (used > 0) throw new Error('এই ক্যাটাগরিতে খরচ আছে, মুছে ফেলা যাবে না');
+  await d.expense_categories.delete(id);
+  await audit('expense_category', id, 'delete', null, cur);
+}
+
+// ============================================================
+// স্টক এন্ট্রি — সংশোধন ও বাতিল
+// ============================================================
+
+export interface StockEntryRow extends StockEntry {
+  medicine_name: string;
+  batch_no: string | null;
+  medicine_id: string;
+  available_qty: number;
+}
+
+export async function fetchRecentStockEntries(limit = 50): Promise<StockEntryRow[]> {
+  const d = db();
+  const [entries, batches, meds] = await Promise.all([
+    d.stock_entries.toArray(), d.batches.toArray(), d.medicines.toArray(),
+  ]);
+  const batchMap = new Map(batches.map((b) => [b.id, b]));
+  const medMap = new Map(meds.map((m) => [m.id, m]));
+  entries.sort((a, b) => b.created_at.localeCompare(a.created_at));
+  return entries.slice(0, limit).map((e) => {
+    const b = batchMap.get(e.batch_id);
+    const m = b ? medMap.get(b.medicine_id) : undefined;
+    return {
+      ...e,
+      medicine_name: m?.name ?? 'অজানা ওষুধ',
+      medicine_id: b?.medicine_id ?? '',
+      batch_no: b?.batch_no ?? null,
+      available_qty: b?.qty_in_stock ?? 0,
+    };
+  });
+}
+
+/** ভুল স্টক এন্ট্রি সংশোধন। পরিমাণ বদলালে batch-এর স্টকও সেই অনুযায়ী বদলায়। */
+export async function updateStockEntry(id: string, patch: {
+  qty?: number; purchase_price_paisa?: number; sale_price_paisa?: number;
+  entry_date?: string; invoice_no?: string | null; note?: string | null;
+}): Promise<void> {
+  const d = db();
+  await d.transaction('rw', [d.stock_entries, d.batches, d.audit_logs], async () => {
+    const cur = await d.stock_entries.get(id);
+    if (!cur) throw new Error('স্টক এন্ট্রি পাওয়া যায়নি');
+    if (!isActive(cur)) throw new Error('বাতিল এন্ট্রি সংশোধন করা যায় না');
+    const qty = patch.qty ?? cur.qty;
+    if (!Number.isFinite(qty) || qty <= 0) throw new Error('পরিমাণ ০-এর বেশি হতে হবে');
+    const purchase = patch.purchase_price_paisa ?? cur.purchase_price_paisa;
+    const sale = patch.sale_price_paisa ?? cur.sale_price_paisa;
+    if (purchase < 0 || sale < 0) throw new Error('দাম ০ বা তার বেশি হতে হবে');
+    const batch = await d.batches.get(cur.batch_id);
+    if (!batch) throw new Error('batch পাওয়া যায়নি');
+    const delta = qty - cur.qty;
+    if (batch.qty_in_stock + delta < 0) {
+      throw new Error(`স্টকে আছে ${batch.qty_in_stock} — এত কমানো যাবে না, কিছু আগেই বিক্রি হয়েছে`);
+    }
+    await d.batches.put({
+      ...batch,
+      qty_in_stock: batch.qty_in_stock + delta,
+      purchase_price_paisa: Math.round(purchase),
+      sale_price_paisa: Math.round(sale),
+    });
+    const next: StockEntry = {
+      ...cur, ...patch,
+      qty, purchase_price_paisa: Math.round(purchase), sale_price_paisa: Math.round(sale),
+    };
+    await d.stock_entries.put(next);
+    await audit('stock_entry', id, 'update', next, cur);
+  });
+}
+
+/** স্টক এন্ট্রি বাতিল — যোগ করা পরিমাণ স্টক থেকে ফিরে যায়। */
+export async function cancelStockEntry(id: string, reason: string): Promise<void> {
+  const d = db();
+  if (!reason.trim()) throw new Error('বাতিলের কারণ লিখুন');
+  await d.transaction('rw', [d.stock_entries, d.batches, d.audit_logs], async () => {
+    const cur = await d.stock_entries.get(id);
+    if (!cur) throw new Error('স্টক এন্ট্রি পাওয়া যায়নি');
+    if (!isActive(cur)) throw new Error('এই এন্ট্রি আগেই বাতিল হয়েছে');
+    const batch = await d.batches.get(cur.batch_id);
+    if (!batch) throw new Error('batch পাওয়া যায়নি');
+    if (batch.qty_in_stock < cur.qty) {
+      throw new Error(`স্টকে আছে ${batch.qty_in_stock}, এন্ট্রি ছিল ${cur.qty} — কিছু আগেই বিক্রি হয়েছে, বাতিল করা যাবে না`);
+    }
+    await d.batches.put({ ...batch, qty_in_stock: batch.qty_in_stock - cur.qty });
+    await d.stock_entries.put({ ...cur, status: 'cancelled', cancelled_reason: reason.trim() });
+    await audit('stock_entry', id, 'cancel', { reason: reason.trim() }, cur);
+  });
+}
+
+// ============================================================
+// স্টক সমন্বয় বাতিল
+// ============================================================
+
+export interface StockAdjustmentRow extends StockAdjustment {
+  medicine_name: string;
+  batch_no: string | null;
+}
+
+export async function fetchRecentAdjustments(limit = 50): Promise<StockAdjustmentRow[]> {
+  const d = db();
+  const [adj, batches, meds] = await Promise.all([
+    d.stock_adjustments.toArray(), d.batches.toArray(), d.medicines.toArray(),
+  ]);
+  const batchMap = new Map(batches.map((b) => [b.id, b]));
+  const medMap = new Map(meds.map((m) => [m.id, m]));
+  adj.sort((a, b) => b.adjusted_at.localeCompare(a.adjusted_at));
+  return adj.slice(0, limit).map((a) => {
+    const b = batchMap.get(a.batch_id);
+    const m = b ? medMap.get(b.medicine_id) : undefined;
+    return { ...a, medicine_name: m?.name ?? 'অজানা ওষুধ', batch_no: b?.batch_no ?? null };
+  });
+}
+
+/** সমন্বয় বাতিল — স্টক আগের অবস্থায় ফিরে যায়। */
+export async function cancelStockAdjustment(id: string, reason: string): Promise<void> {
+  const d = db();
+  if (!reason.trim()) throw new Error('বাতিলের কারণ লিখুন');
+  await d.transaction('rw', [d.stock_adjustments, d.batches, d.audit_logs], async () => {
+    const cur = await d.stock_adjustments.get(id);
+    if (!cur) throw new Error('সমন্বয় পাওয়া যায়নি');
+    if (!isActive(cur)) throw new Error('এই সমন্বয় আগেই বাতিল হয়েছে');
+    const batch = await d.batches.get(cur.batch_id);
+    if (!batch) throw new Error('batch পাওয়া যায়নি');
+    if (batch.qty_in_stock - cur.qty < 0) throw new Error('স্টক negative হয়ে যাবে, বাতিল করা যাবে না');
+    await d.batches.put({ ...batch, qty_in_stock: batch.qty_in_stock - cur.qty });
+    await d.stock_adjustments.put({ ...cur, status: 'cancelled', cancelled_reason: reason.trim() });
+    await audit('stock_adjustment', id, 'cancel', { reason: reason.trim() }, cur);
+  });
+}
+
+// ============================================================
+// বিক্রয় রিটার্ন বাতিল
+// ============================================================
+
+export interface SaleReturnRow extends SaleReturn {
+  txn_no: string;
+  item_count: number;
+}
+
+export async function fetchRecentReturns(limit = 50): Promise<SaleReturnRow[]> {
+  const d = db();
+  const [rets, sales, items] = await Promise.all([
+    d.sale_returns.toArray(), d.sales.toArray(), d.sale_return_items.toArray(),
+  ]);
+  const txnOf = new Map(sales.map((s) => [s.id, s.txn_no]));
+  rets.sort((a, b) => b.created_at.localeCompare(a.created_at));
+  return rets.slice(0, limit).map((r) => ({
+    ...r,
+    txn_no: txnOf.get(r.sale_id) ?? '—',
+    item_count: items.filter((i) => i.return_id === r.id).length,
+  }));
+}
+
+/** রিটার্ন বাতিল — ফেরত আসা স্টক আবার কমে, বাকির সমন্বয় উল্টে যায়। */
+export async function cancelSaleReturn(id: string, reason: string): Promise<void> {
+  const d = db();
+  if (!reason.trim()) throw new Error('বাতিলের কারণ লিখুন');
+  await d.transaction('rw',
+    [d.sale_returns, d.sale_return_items, d.sales, d.batches, d.customers, d.customer_ledger, d.audit_logs],
+    async () => {
+      const cur = await d.sale_returns.get(id);
+      if (!cur) throw new Error('রিটার্ন পাওয়া যায়নি');
+      if (!isActive(cur)) throw new Error('এই রিটার্ন আগেই বাতিল হয়েছে');
+      const items = await d.sale_return_items.where('return_id').equals(id).toArray();
+      for (const it of items) {
+        if (!it.restock) continue;
+        const b = await d.batches.get(it.batch_id);
+        if (!b) continue;
+        if (b.qty_in_stock < it.qty) {
+          throw new Error('ফেরত আসা স্টক আবার বিক্রি হয়ে গেছে, রিটার্ন বাতিল করা যাবে না');
+        }
+        await d.batches.put({ ...b, qty_in_stock: b.qty_in_stock - it.qty });
+      }
+      const sale = await d.sales.get(cur.sale_id);
+      if (sale?.customer_id) {
+        const ledger = await d.customer_ledger
+          .where('customer_id').equals(sale.customer_id)
+          .filter((l) => l.ref_sale_id === cur.sale_id && l.entry_type === 'return_adjust' && l.note === 'বিক্রয় রিটার্ন')
+          .toArray();
+        const reverse = sum(ledger.map((l) => l.amount_paisa));
+        if (reverse !== 0) {
+          await d.customer_ledger.add({
+            id: uuid(), customer_id: sale.customer_id, entry_type: 'return_adjust',
+            amount_paisa: -reverse, ref_sale_id: cur.sale_id,
+            note: 'রিটার্ন বাতিল', entry_date: nowISO(),
+          });
+          await recomputeCustomerDue(sale.customer_id);
+        }
+      }
+      await d.sale_returns.put({ ...cur, status: 'cancelled', cancelled_reason: reason.trim() });
+      await audit('sale_return', id, 'cancel', { reason: reason.trim() }, cur);
+    });
+}
+
+// ============================================================
+// ওষুধ ও batch মুছে ফেলা (কোনো লেনদেন না থাকলেই)
+// ============================================================
+
+/** batch-এ কোনো স্টক এন্ট্রি, বিক্রয়, সমন্বয় বা রিটার্ন না থাকলে মুছে ফেলা যায়। */
+export async function deleteBatch(batchId: string): Promise<void> {
+  const d = db();
+  await d.transaction('rw',
+    [d.batches, d.stock_entries, d.sale_items, d.stock_adjustments, d.sale_return_items, d.audit_logs],
+    async () => {
+      const cur = await d.batches.get(batchId);
+      if (!cur) throw new Error('batch পাওয়া যায়নি');
+      const entries = await d.stock_entries.where('batch_id').equals(batchId).count();
+      if (entries > 0) throw new Error('এই batch-এ স্টক এন্ট্রি আছে, মুছে ফেলা যাবে না');
+      const sold = await d.sale_items.where('batch_id').equals(batchId).count();
+      if (sold > 0) throw new Error('এই batch থেকে বিক্রয় হয়েছে, মুছে ফেলা যাবে না');
+      const adj = await d.stock_adjustments.where('batch_id').equals(batchId).count();
+      if (adj > 0) throw new Error('এই batch-এ সমন্বয় আছে, মুছে ফেলা যাবে না');
+      const ret = await d.sale_return_items.where('batch_id').equals(batchId).count();
+      if (ret > 0) throw new Error('এই batch-এ রিটার্ন আছে, মুছে ফেলা যাবে না');
+      await d.batches.delete(batchId);
+      await audit('batch', batchId, 'delete', null, cur);
+    });
+}
+
+/** ওষুধের কোনো batch বা বিক্রয় না থাকলে সম্পূর্ণ মুছে ফেলা যায়। */
+export async function deleteMedicine(id: string): Promise<void> {
+  const d = db();
+  await d.transaction('rw', [d.medicines, d.batches, d.sale_items, d.audit_logs], async () => {
+    const cur = await d.medicines.get(id);
+    if (!cur) throw new Error('ওষুধ পাওয়া যায়নি');
+    const sold = await d.sale_items.where('medicine_id').equals(id).count();
+    if (sold > 0) throw new Error('এই ওষুধের বিক্রয় আছে, মুছে ফেলা যাবে না — বন্ধ করুন');
+    const batches = await d.batches.where('medicine_id').equals(id).count();
+    if (batches > 0) throw new Error('এই ওষুধের batch আছে, আগে batch মুছুন অথবা ওষুধ বন্ধ করুন');
+    await d.medicines.delete(id);
+    await audit('medicine', id, 'delete', null, cur);
+  });
+}
+
+// ============================================================
+// ক্যাশ সেশন মুছে ফেলা
+// ============================================================
+export async function deleteCashSession(date: string): Promise<void> {
+  const d = db();
+  const cur = await d.cash_sessions.where('session_date').equals(date).first();
+  if (!cur) throw new Error('এই দিনের ক্যাশ হিসাব নেই');
+  await d.cash_sessions.delete(cur.id);
+  await audit('cash_session', cur.id, 'delete', null, cur);
 }
 
 // business-rules re-export used only for typing convenience

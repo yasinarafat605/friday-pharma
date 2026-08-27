@@ -1,8 +1,12 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { fetchCustomers, recordDuePayment } from '@/lib/data';
-import { formatTaka, takaToPaisa, paisaToTaka } from '@/lib/money';
+import {
+  fetchCustomers, recordDuePayment, fetchRecentDuePayments, cancelDuePayment,
+  type DuePaymentRow,
+} from '@/lib/data';
+import { CancelButton, StatusBadge } from '@/components/CancelButton';
+import { formatTaka, takaToPaisa, paisaToTaka, toBanglaDigits } from '@/lib/money';
 import { validateDuePayment } from '@/lib/business-rules';
 import { L } from '@/lib/i18n/labels';
 import type { Customer, PaymentMethod } from '@/types/db';
@@ -18,8 +22,12 @@ export default function DueCollectionPage() {
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
+  const [history, setHistory] = useState<DuePaymentRow[]>([]);
 
-  async function load() { setCustomers(await fetchCustomers()); }
+  async function load() {
+    setCustomers(await fetchCustomers());
+    setHistory(await fetchRecentDuePayments(30));
+  }
   useEffect(() => { void load(); }, []);
 
   const selected = useMemo(
@@ -52,7 +60,7 @@ export default function DueCollectionPage() {
   const dueCustomers = customers.filter((c) => c.current_due_paisa > 0);
 
   return (
-    <div className="mx-auto max-w-xl space-y-4">
+    <div className="mx-auto max-w-2xl space-y-4">
       <h1 className="text-2xl font-bold text-brand-dark">{L.nav.dueCollection}</h1>
 
       <form onSubmit={submit} className="card space-y-4">
@@ -76,7 +84,7 @@ export default function DueCollectionPage() {
 
         <div className="grid grid-cols-2 gap-3">
           <div><label className="label">পরিশোধের পরিমাণ (৳)</label>
-            <input className="input" type="number" min={0}
+            <input className="input" type="number" inputMode="decimal" step="0.01" min={0}
               max={selected ? paisaToTaka(selected.current_due_paisa) : undefined}
               value={amountTaka} onChange={(e) => setAmountTaka(e.target.value)} /></div>
           <div><label className="label">তারিখ</label>
@@ -95,6 +103,42 @@ export default function DueCollectionPage() {
 
         <button className="btn-primary w-full" disabled={busy}>{busy ? L.common.loading : 'আদায় রেকর্ড করুন'}</button>
       </form>
+
+      <div className="card space-y-3">
+        <h2 className="font-bold text-brand-dark">সাম্প্রতিক আদায়</h2>
+        <p className="text-xs text-gray-500">
+          ভুল হলে বাতিল করুন। বাতিল করলে টাকা আবার বাকিতে যোগ হবে, রেকর্ডটি বাতিল চিহ্ন নিয়ে থাকবে।
+        </p>
+        {history.length === 0 ? (
+          <p className="text-sm text-gray-400">কোনো আদায় নেই</p>
+        ) : (
+          <ul className="space-y-2">
+            {history.map((h) => (
+              <li key={h.id} className={`flex flex-wrap items-center gap-3 rounded-xl px-3 py-2 ${
+                h.status === 'cancelled' ? 'bg-gray-100' : 'bg-gray-50'}`}>
+                <div className="flex-1">
+                  <p className="font-semibold">
+                    {h.customer_name ?? 'অজানা'} <StatusBadge status={h.status} />
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    {toBanglaDigits(h.pay_date)} · {L.paymentMethod[h.method]}
+                    {h.note ? ` · ${h.note}` : ''}
+                  </p>
+                </div>
+                <span className="font-bold text-success">{formatTaka(h.amount_paisa)}</span>
+                {h.status !== 'cancelled' && (
+                  <CancelButton
+                    confirmText={`${h.customer_name ?? ''}-এর ${formatTaka(h.amount_paisa)} আদায় বাতিল হবে এবং টাকা আবার বাকিতে যোগ হবে।`}
+                    onCancel={(reason) => cancelDuePayment(h.id, reason)}
+                    onError={setErr}
+                    onDone={async () => { setMsg('আদায় বাতিল হয়েছে'); await load(); }}
+                  />
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </div>
   );
 }

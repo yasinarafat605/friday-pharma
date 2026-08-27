@@ -1,7 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { fetchStockRows, adjustStock } from '@/lib/data';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  fetchStockRows, adjustStock, fetchRecentAdjustments, cancelStockAdjustment,
+  type StockAdjustmentRow,
+} from '@/lib/data';
+import { CancelButton, StatusBadge } from '@/components/CancelButton';
 import { toBanglaDigits } from '@/lib/money';
 import { L } from '@/lib/i18n/labels';
 import type { StockRow, AdjustmentReason } from '@/types/db';
@@ -20,11 +24,15 @@ export default function StockAdjustPage() {
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
 
-  async function load() {
-    try { setRows(await fetchStockRows()); }
-    catch (e) { setErr(e instanceof Error ? e.message : 'লোড ব্যর্থ'); }
-  }
-  useEffect(() => { void load(); }, []);
+  const [history, setHistory] = useState<StockAdjustmentRow[]>([]);
+
+  const load = useCallback(async () => {
+    try {
+      setRows(await fetchStockRows());
+      setHistory(await fetchRecentAdjustments(30));
+    } catch (e) { setErr(e instanceof Error ? e.message : 'লোড ব্যর্থ'); }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
 
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
@@ -121,6 +129,45 @@ export default function StockAdjustPage() {
         <button className="btn-primary w-full" disabled={busy} onClick={submit}>
           {busy ? L.common.loading : 'সমন্বয় করুন'}
         </button>
+      </div>
+
+      <div className="card space-y-3">
+        <h2 className="font-bold text-brand-dark">সাম্প্রতিক সমন্বয়</h2>
+        <p className="text-xs text-gray-500">
+          ভুল সমন্বয় বাতিল করলে স্টক আগের অবস্থায় ফিরে যাবে। রেকর্ডটি বাতিল চিহ্ন নিয়ে থাকবে।
+        </p>
+        {history.length === 0 && <p className="text-gray-400">কোনো সমন্বয় নেই</p>}
+        <ul className="space-y-2">
+          {history.map((h) => (
+            <li key={h.id} className={`flex flex-wrap items-center gap-3 rounded-xl px-3 py-2 ${
+              h.status === 'cancelled' ? 'bg-gray-100' : 'bg-gray-50'}`}>
+              <div className="flex-1">
+                <p className="font-semibold">
+                  {h.medicine_name} <StatusBadge status={h.status} />
+                </p>
+                <p className="text-xs text-gray-500">
+                  {toBanglaDigits(h.adjusted_at.slice(0, 10))} · {L.adjustmentReason[h.reason]}
+                  {h.batch_no ? ` · batch ${h.batch_no}` : ''}
+                  {h.note ? ` · ${h.note}` : ''}
+                </p>
+                {h.cancelled_reason && (
+                  <p className="text-xs text-danger">বাতিলের কারণ: {h.cancelled_reason}</p>
+                )}
+              </div>
+              <span className={`font-bold ${h.qty < 0 ? 'text-danger' : 'text-success'}`}>
+                {h.qty < 0 ? '−' : '+'} {toBanglaDigits(Math.abs(h.qty))}
+              </span>
+              {h.status !== 'cancelled' && (
+                <CancelButton
+                  confirmText={`${h.medicine_name}-এর সমন্বয় বাতিল হবে এবং স্টক আগের অবস্থায় ফিরে যাবে।`}
+                  onCancel={(reason) => cancelStockAdjustment(h.id, reason)}
+                  onError={setErr}
+                  onDone={async () => { setMsg('সমন্বয় বাতিল হয়েছে'); await load(); }}
+                />
+              )}
+            </li>
+          ))}
+        </ul>
       </div>
     </div>
   );

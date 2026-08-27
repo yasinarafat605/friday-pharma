@@ -1,10 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   fetchRecentSales, fetchSaleItems, createSaleReturn,
-  type SaleSummary, type SaleItemRow,
+  fetchRecentReturns, cancelSaleReturn,
+  type SaleSummary, type SaleItemRow, type SaleReturnRow,
 } from '@/lib/data';
+import { CancelButton, StatusBadge } from '@/components/CancelButton';
 import { formatTaka, takaToPaisa, toBanglaDigits } from '@/lib/money';
 import { L } from '@/lib/i18n/labels';
 
@@ -27,6 +29,12 @@ export default function SaleReturnPage() {
   const [msg, setMsg] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
+  const [returns, setReturns] = useState<SaleReturnRow[]>([]);
+
+  const loadReturns = useCallback(async () => {
+    setReturns(await fetchRecentReturns(30));
+  }, []);
+  useEffect(() => { void loadReturns(); }, [loadReturns]);
 
   useEffect(() => {
     (async () => {
@@ -82,6 +90,7 @@ export default function SaleReturnPage() {
       setMsg(queued ? 'রিটার্ন সংরক্ষিত (অফলাইন) — সিঙ্ক অপেক্ষমাণ' : 'রিটার্ন সম্পন্ন হয়েছে');
       setLines([]); setSaleId(''); setReason(''); setRefundTaka('');
       setSales(await fetchRecentSales());
+      await loadReturns();
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'রিটার্ন ব্যর্থ');
     } finally { setBusy(false); }
@@ -140,7 +149,7 @@ export default function SaleReturnPage() {
             </div>
             <div>
               <label className="label">ফেরতযোগ্য টাকা (৳) — খালি রাখলে {formatTaka(suggestedRefund)}</label>
-              <input className="input" type="number" min={0} value={refundTaka}
+              <input className="input" type="number" inputMode="decimal" step="0.01" min={0} value={refundTaka}
                 onChange={(e) => setRefundTaka(e.target.value)} />
             </div>
 
@@ -155,6 +164,39 @@ export default function SaleReturnPage() {
 
         {err && lines.length === 0 && <p className="rounded bg-danger/10 px-3 py-2 text-danger">{err}</p>}
         {msg && lines.length === 0 && <p className="rounded bg-success/10 px-3 py-2 text-success">{msg}</p>}
+      </div>
+
+      <div className="card space-y-3">
+        <h2 className="font-bold text-brand-dark">সাম্প্রতিক রিটার্ন</h2>
+        <p className="text-xs text-gray-500">
+          রিটার্ন বাতিল করলে ফেরত আসা স্টক আবার কমবে এবং বাকির সমন্বয় উল্টে যাবে।
+        </p>
+        {returns.length === 0 && <p className="text-gray-400">কোনো রিটার্ন নেই</p>}
+        <ul className="space-y-2">
+          {returns.map((r) => (
+            <li key={r.id} className={`flex flex-wrap items-center gap-3 rounded-xl px-3 py-2 ${
+              r.status === 'cancelled' ? 'bg-gray-100' : 'bg-gray-50'}`}>
+              <div className="flex-1">
+                <p className="font-semibold">{r.txn_no} <StatusBadge status={r.status} /></p>
+                <p className="text-xs text-gray-500">
+                  {toBanglaDigits(r.return_date)} · {toBanglaDigits(r.item_count)} আইটেম · {r.reason}
+                </p>
+                {r.cancelled_reason && (
+                  <p className="text-xs text-danger">বাতিলের কারণ: {r.cancelled_reason}</p>
+                )}
+              </div>
+              <span className="font-bold text-danger">{formatTaka(r.refund_paisa)}</span>
+              {r.status !== 'cancelled' && (
+                <CancelButton
+                  confirmText={`${r.txn_no} বিক্রয়ের রিটার্ন বাতিল হবে এবং স্টক ও বাকির হিসাব উল্টে যাবে।`}
+                  onCancel={(reason) => cancelSaleReturn(r.id, reason)}
+                  onError={setErr}
+                  onDone={async () => { setMsg('রিটার্ন বাতিল হয়েছে'); await loadReturns(); }}
+                />
+              )}
+            </li>
+          ))}
+        </ul>
       </div>
     </div>
   );

@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { fetchCashSummary, saveCashSession, type CashSummary } from '@/lib/data';
+import { fetchCashSummary, saveCashSession, deleteCashSession, type CashSummary } from '@/lib/data';
 import { formatTaka, takaToPaisa, paisaToTaka } from '@/lib/money';
 import { L } from '@/lib/i18n/labels';
 
@@ -27,6 +27,18 @@ export default function CashPage() {
   }, [date]);
 
   useEffect(() => { void load(); }, [load]);
+
+  async function remove() {
+    if (!window.confirm(`${date} তারিখের ক্যাশ হিসাব মুছে ফেলবেন? বিক্রয় ও খরচের রেকর্ড অক্ষত থাকবে।`)) return;
+    setBusy(true); setErr(''); setMsg('');
+    try {
+      await deleteCashSession(date);
+      setMsg('ক্যাশ হিসাব মুছে ফেলা হয়েছে');
+      await load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'মুছে ফেলা যায়নি');
+    } finally { setBusy(false); }
+  }
 
   async function save() {
     setBusy(true); setErr(''); setMsg('');
@@ -56,7 +68,7 @@ export default function CashPage() {
       <div className="card space-y-3">
         <div>
           <label className="label">দিনের শুরুর ক্যাশ (৳)</label>
-          <input className="input" type="number" min={0} value={openingTaka}
+          <input className="input" type="number" inputMode="decimal" step="0.01" min={0} value={openingTaka}
             onChange={(e) => setOpeningTaka(e.target.value)} />
         </div>
 
@@ -74,7 +86,7 @@ export default function CashPage() {
 
         <div>
           <label className="label">বাস্তব ক্লোজিং ক্যাশ (দিন শেষে গুনে লিখুন) (৳)</label>
-          <input className="input" type="number" min={0} value={actualTaka}
+          <input className="input" type="number" inputMode="decimal" step="0.01" min={0} value={actualTaka}
             onChange={(e) => setActualTaka(e.target.value)} placeholder="ঐচ্ছিক" />
         </div>
 
@@ -88,9 +100,14 @@ export default function CashPage() {
           </div>
         )}
 
-        <button className="btn-primary w-full" disabled={busy} onClick={save}>
-          {busy ? L.common.loading : 'সংরক্ষণ করুন'}
-        </button>
+        <div className="flex flex-wrap gap-3">
+          <button className="btn-primary flex-1" disabled={busy} onClick={save}>
+            {busy ? L.common.loading : 'সংরক্ষণ করুন'}
+          </button>
+          <button className="btn-danger" disabled={busy} onClick={remove}>
+            এই দিনের হিসাব মুছুন
+          </button>
+        </div>
       </div>
     </div>
   );

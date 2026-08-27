@@ -69,6 +69,9 @@ export interface StockEntry {
   invoice_no?: string | null;
   note?: string | null;
   created_at: string;
+  /** পুরোনো রেকর্ডে না থাকলে completed ধরা হয়। */
+  status?: TxnStatus;
+  cancelled_reason?: string | null;
 }
 
 export interface Customer {
@@ -170,6 +173,8 @@ export interface StockAdjustment {
   reason: AdjustmentReason;
   note?: string | null;
   adjusted_at: string;
+  status?: TxnStatus;
+  cancelled_reason?: string | null;
 }
 
 export interface SaleReturn {
@@ -180,6 +185,8 @@ export interface SaleReturn {
   refund_paisa: number;
   reason: string;
   created_at: string;
+  status?: TxnStatus;
+  cancelled_reason?: string | null;
 }
 
 export interface SaleReturnItem {

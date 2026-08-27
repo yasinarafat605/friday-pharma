@@ -90,6 +90,12 @@ export default function SalesPage() {
     setCart((prev) => prev.map((l) => (l.batch_id === batch_id ? { ...l, qty } : l)));
   }
 
+  /** এই বিক্রয়ের জন্য দাম বদলানো যায় (পয়সা সহ)। স্টকের দাম অপরিবর্তিত থাকে। */
+  function setLinePrice(batch_id: string, taka: string) {
+    setCart((prev) => prev.map((l) =>
+      l.batch_id === batch_id ? { ...l, unit_price_paisa: Math.max(0, takaToPaisa(taka)) } : l));
+  }
+
   function removeLine(batch_id: string) {
     setCart((prev) => prev.filter((l) => l.batch_id !== batch_id));
   }
@@ -194,20 +200,35 @@ export default function SalesPage() {
           ) : (
             <ul className="space-y-2">
               {cart.map((l) => (
-                <li key={l.batch_id} className="flex items-center gap-2">
-                  <span className="flex-1">
-                    {l.name}
-                    <span className="block text-xs text-gray-400">
-                      {formatTaka(l.unit_price_paisa)} × {toBanglaDigits(l.qty)} = {formatTaka(l.unit_price_paisa * l.qty)}
+                <li key={l.batch_id} className="rounded-xl bg-gray-50 p-2">
+                  <div className="flex items-center gap-2">
+                    <span className="flex-1 font-medium">{l.name}</span>
+                    <button className="text-danger px-2" onClick={() => removeLine(l.batch_id)}>✕</button>
+                  </div>
+                  <div className="mt-1 flex items-end gap-2">
+                    <div className="w-24">
+                      <label className="label mb-0 text-xs">দাম (৳)</label>
+                      <input
+                        type="number" inputMode="decimal" step="0.01" min={0}
+                        className="input w-full py-2 text-center"
+                        value={paisaToTaka(l.unit_price_paisa)}
+                        onChange={(e) => setLinePrice(l.batch_id, e.target.value)}
+                      />
+                    </div>
+                    <span className="pb-3 text-gray-400">×</span>
+                    <div className="w-20">
+                      <label className="label mb-0 text-xs">পরিমাণ</label>
+                      <input
+                        type="number" min={1} max={l.available}
+                        className="input w-full py-2 text-center"
+                        value={l.qty}
+                        onChange={(e) => setQty(l.batch_id, Math.max(1, Number(e.target.value)))}
+                      />
+                    </div>
+                    <span className="flex-1 pb-3 text-right text-sm font-semibold">
+                      {formatTaka(l.unit_price_paisa * l.qty)}
                     </span>
-                  </span>
-                  <input
-                    type="number" min={1} max={l.available}
-                    className="input w-20 py-2 text-center"
-                    value={l.qty}
-                    onChange={(e) => setQty(l.batch_id, Math.max(1, Number(e.target.value)))}
-                  />
-                  <button className="text-danger" onClick={() => removeLine(l.batch_id)}>✕</button>
+                  </div>
                 </li>
               ))}
             </ul>
@@ -216,7 +237,7 @@ export default function SalesPage() {
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="label">ছাড় (৳)</label>
-              <input className="input" type="number" min={0} value={discountTaka}
+              <input className="input" type="number" inputMode="decimal" step="0.01" min={0} value={discountTaka}
                 onChange={(e) => setDiscountTaka(e.target.value)} />
             </div>
             <div>
@@ -248,7 +269,7 @@ export default function SalesPage() {
           {paymentType === 'mixed' && (
             <div>
               <label className="label">নগদ প্রদান (৳)</label>
-              <input className="input" type="number" min={0} max={paisaToTaka(total)}
+              <input className="input" type="number" inputMode="decimal" step="0.01" min={0} max={paisaToTaka(total)}
                 value={cashPaidTaka} onChange={(e) => setCashPaidTaka(e.target.value)} />
             </div>
           )}

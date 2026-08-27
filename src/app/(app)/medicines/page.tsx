@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   fetchAllMedicines, fetchBatchesForMedicine,
   updateMedicine, setMedicineActive, updateBatch,
+  deleteMedicine, deleteBatch,
 } from '@/lib/data';
 import { formatTaka, takaToPaisa, paisaToTaka, toBanglaDigits } from '@/lib/money';
 import { expiryStatus } from '@/lib/business-rules';
@@ -164,6 +165,20 @@ function MedicineCard({
     } finally { setBusy(false); }
   }
 
+  async function remove() {
+    const ok = window.confirm(
+      `"${med.name}" সম্পূর্ণ মুছে ফেলবেন? এটি ফেরানো যাবে না। বিক্রয় বা batch থাকলে মোছা যাবে না — সেক্ষেত্রে বন্ধ করুন।`,
+    );
+    if (!ok) return;
+    setBusy(true);
+    try {
+      await deleteMedicine(med.id);
+      await onSaved('ওষুধ মুছে ফেলা হয়েছে');
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'মুছে ফেলা যায়নি');
+    } finally { setBusy(false); }
+  }
+
   async function toggleActive() {
     const turningOff = med.is_active;
     if (turningOff) {
@@ -237,6 +252,14 @@ function MedicineCard({
             <button className={med.is_active ? 'btn-danger' : 'btn-outline'} disabled={busy} onClick={toggleActive}>
               {med.is_active ? 'ওষুধ বন্ধ করুন' : 'আবার চালু করুন'}
             </button>
+            <button className="btn-outline border-danger text-danger" disabled={busy || batches.length > 0}
+              onClick={remove}
+              title={batches.length > 0 ? 'batch থাকায় মোছা যাবে না' : ''}>
+              মুছে ফেলুন
+            </button>
+            {batches.length > 0 && (
+              <span className="self-center text-xs text-gray-500">batch থাকায় মোছা যাবে না</span>
+            )}
           </div>
 
           <div>
@@ -278,6 +301,20 @@ function BatchRow({
 }) {
   const [edit, setEdit] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  async function remove() {
+    const ok = window.confirm(
+      'এই batch মুছে ফেলবেন? স্টক এন্ট্রি, বিক্রয়, সমন্বয় বা রিটার্ন থাকলে মোছা যাবে না।',
+    );
+    if (!ok) return;
+    setBusy(true);
+    try {
+      await deleteBatch(batch.id);
+      await onSaved('Batch মুছে ফেলা হয়েছে');
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'মুছে ফেলা যায়নি');
+    } finally { setBusy(false); }
+  }
   const [f, setF] = useState({
     batch_no: batch.batch_no ?? '',
     expiry_date: batch.expiry_date ?? '',
@@ -317,6 +354,9 @@ function BatchRow({
         <span className="text-gray-600">ক্রয়: {formatTaka(batch.purchase_price_paisa)}</span>
         <span className="text-gray-600">বিক্রয়: {formatTaka(batch.sale_price_paisa)}</span>
         <button className="ml-auto text-brand underline" onClick={() => setEdit(true)}>সংশোধন</button>
+        <button className="text-danger underline disabled:opacity-40" disabled={busy} onClick={remove}>
+          মুছুন
+        </button>
       </div>
     );
   }

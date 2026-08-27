@@ -1,12 +1,15 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { fetchSettings, saveSettings } from '@/lib/data';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  fetchSettings, saveSettings, fetchExpenseCategories,
+  addExpenseCategory, updateExpenseCategory, deleteExpenseCategory,
+} from '@/lib/data';
 import { setPin, isValidPinFormat, PIN_LENGTH } from '@/lib/auth';
 import { backupStatus } from '@/lib/business-rules';
 import { toBanglaDigits } from '@/lib/money';
 import { L } from '@/lib/i18n/labels';
-import type { AppSettings } from '@/types/db';
+import type { AppSettings, ExpenseCategory } from '@/types/db';
 
 export default function SettingsPage() {
   const [s, setS] = useState<AppSettings | null>(null);
@@ -85,6 +88,104 @@ export default function SettingsPage() {
         <button className="btn-primary" onClick={save}>{L.common.save}</button>
         <button className="btn-outline" onClick={changePin}>PIN পরিবর্তন</button>
       </div>
+
+      <CategoryManager onError={setErr} onMsg={setMsg} />
+    </div>
+  );
+}
+
+/** খরচের ক্যাটাগরি যোগ, সংশোধন ও মুছে ফেলা। */
+function CategoryManager({ onError, onMsg }: { onError: (t: string) => void; onMsg: (t: string) => void }) {
+  const [cats, setCats] = useState<ExpenseCategory[]>([]);
+  const [newName, setNewName] = useState('');
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    try { setCats(await fetchExpenseCategories()); }
+    catch (e) { onError(e instanceof Error ? e.message : 'লোড ব্যর্থ'); }
+  }, [onError]);
+  useEffect(() => { void load(); }, [load]);
+
+  async function add() {
+    if (!newName.trim()) { onError('ক্যাটাগরির নাম দিন'); return; }
+    setBusy(true);
+    try {
+      await addExpenseCategory({ bn_name: newName });
+      setNewName('');
+      onMsg('ক্যাটাগরি যোগ হয়েছে');
+      await load();
+    } catch (e) { onError(e instanceof Error ? e.message : 'ব্যর্থ'); }
+    finally { setBusy(false); }
+  }
+
+  async function saveEdit() {
+    if (!editId) return;
+    setBusy(true);
+    try {
+      await updateExpenseCategory(editId, { bn_name: editName });
+      setEditId(null);
+      onMsg('ক্যাটাগরি সংশোধন হয়েছে');
+      await load();
+    } catch (e) { onError(e instanceof Error ? e.message : 'ব্যর্থ'); }
+    finally { setBusy(false); }
+  }
+
+  async function remove(c: ExpenseCategory) {
+    if (!window.confirm(`"${c.bn_name}" ক্যাটাগরি মুছে ফেলবেন? এই ক্যাটাগরিতে খরচ থাকলে মোছা যাবে না।`)) return;
+    setBusy(true);
+    try {
+      await deleteExpenseCategory(c.id);
+      onMsg('ক্যাটাগরি মুছে ফেলা হয়েছে');
+      await load();
+    } catch (e) { onError(e instanceof Error ? e.message : 'মুছে ফেলা যায়নি'); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div className="card space-y-3">
+      <h2 className="font-bold text-brand-dark">খরচের ক্যাটাগরি</h2>
+      <div className="flex gap-2">
+        <input className="input" placeholder="নতুন ক্যাটাগরির নাম"
+          value={newName} onChange={(e) => setNewName(e.target.value)} />
+        <button className="btn-primary whitespace-nowrap" disabled={busy} onClick={add}>
+          {L.common.add}
+        </button>
+      </div>
+      <ul className="space-y-2">
+        {cats.map((c) => (
+          <li key={c.id} className="flex flex-wrap items-center gap-2 rounded-xl bg-gray-50 px-3 py-2">
+            {editId === c.id ? (
+              <>
+                <input className="input flex-1" value={editName}
+                  onChange={(e) => setEditName(e.target.value)} />
+                <button className="btn-primary px-4 py-2 text-sm" disabled={busy} onClick={saveEdit}>
+                  {L.common.save}
+                </button>
+                <button className="btn-outline px-4 py-2 text-sm" onClick={() => setEditId(null)}>
+                  {L.common.cancel}
+                </button>
+              </>
+            ) : (
+              <>
+                <span className="flex-1">
+                  {c.bn_name}
+                  {c.is_recurring && <span className="ml-2 badge bg-brand-light text-brand-dark">মাসিক</span>}
+                </span>
+                <button className="rounded-lg border border-brand px-3 py-1 text-sm font-semibold text-brand"
+                  onClick={() => { setEditId(c.id); setEditName(c.bn_name); }}>
+                  {L.common.edit}
+                </button>
+                <button className="rounded-lg border border-danger px-3 py-1 text-sm font-semibold text-danger"
+                  disabled={busy} onClick={() => remove(c)}>
+                  মুছুন
+                </button>
+              </>
+            )}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

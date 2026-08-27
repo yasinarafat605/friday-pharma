@@ -12,6 +12,7 @@ import { L } from '@/lib/i18n/labels';
 const NAV = [
   { href: '/dashboard', label: L.nav.dashboard, icon: '🏠' },
   { href: '/sales', label: L.nav.sales, icon: '🧾' },
+  { href: '/sales-history', label: L.nav.salesHistory, icon: '📜' },
   { href: '/add-stock', label: L.nav.addStock, icon: '➕' },
   { href: '/inventory', label: L.nav.inventory, icon: '💊' },
   { href: '/medicines', label: L.nav.medicines, icon: '✏️' },

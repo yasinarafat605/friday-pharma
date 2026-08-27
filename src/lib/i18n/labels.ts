@@ -6,6 +6,7 @@ export const L = {
   nav: {
     dashboard: 'ড্যাশবোর্ড',
     sales: 'বিক্রয়',
+    salesHistory: 'বিক্রয় তালিকা',
     addStock: 'নতুন স্টক',
     inventory: 'ওষুধ ও স্টক',
     medicines: 'ওষুধ ব্যবস্থাপনা',

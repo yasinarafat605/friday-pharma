@@ -1,8 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { addStock, upsertMedicine, fetchMedicines } from '@/lib/data';
-import { takaToPaisa } from '@/lib/money';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  addStock, upsertMedicine, fetchMedicines,
+  fetchRecentStockEntries, updateStockEntry, cancelStockEntry, type StockEntryRow,
+} from '@/lib/data';
+import { CancelButton, StatusBadge } from '@/components/CancelButton';
+import { formatTaka, takaToPaisa, paisaToTaka, toBanglaDigits } from '@/lib/money';
 import { L } from '@/lib/i18n/labels';
 import type { Medicine, MedicineType, UnitType } from '@/types/db';
 
@@ -28,10 +32,53 @@ export default function AddStockPage() {
   const [sale, setSale] = useState('');
   const [invoice, setInvoice] = useState('');
 
-  async function loadMeds() {
+  // সাম্প্রতিক এন্ট্রি ও সংশোধন
+  const [entries, setEntries] = useState<StockEntryRow[]>([]);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [ef, setEf] = useState({ qty: '', purchase: '', sale: '', date: '', invoice: '', note: '' });
+
+  const loadEntries = useCallback(async () => {
+    setEntries(await fetchRecentStockEntries(30));
+  }, []);
+
+  const loadMeds = useCallback(async () => {
     setMedicines(await fetchMedicines());
+  }, []);
+
+  useEffect(() => { void loadMeds(); void loadEntries(); }, [loadMeds, loadEntries]);
+
+  function startEdit(r: StockEntryRow) {
+    setEditId(r.id);
+    setEf({
+      qty: String(r.qty),
+      purchase: String(paisaToTaka(r.purchase_price_paisa)),
+      sale: String(paisaToTaka(r.sale_price_paisa)),
+      date: r.entry_date,
+      invoice: r.invoice_no ?? '',
+      note: r.note ?? '',
+    });
   }
-  useEffect(() => { void loadMeds(); }, []);
+
+  async function saveEdit() {
+    if (!editId) return;
+    setErr(''); setMsg('');
+    setBusy(true);
+    try {
+      await updateStockEntry(editId, {
+        qty: Number(ef.qty),
+        purchase_price_paisa: takaToPaisa(ef.purchase),
+        sale_price_paisa: takaToPaisa(ef.sale),
+        entry_date: ef.date,
+        invoice_no: ef.invoice.trim() || null,
+        note: ef.note.trim() || null,
+      });
+      setEditId(null);
+      setMsg('স্টক এন্ট্রি সংশোধন হয়েছে');
+      await loadEntries();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'সংশোধন ব্যর্থ');
+    } finally { setBusy(false); }
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -61,6 +108,7 @@ export default function AddStockPage() {
       setMsg(queued ? 'স্টক সংরক্ষিত (অফলাইন) — সিঙ্ক অপেক্ষমাণ' : 'স্টক সফলভাবে যোগ হয়েছে');
       setBatchNo(''); setExpiry(''); setQty(''); setPurchase(''); setSale(''); setInvoice('');
       if (mode === 'new') { setNm({ name: '', generic_name: '', company: '', type: 'tablet', unit: 'piece' }); await loadMeds(); }
+      await loadEntries();
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'ব্যর্থ');
     } finally {
@@ -119,9 +167,9 @@ export default function AddStockPage() {
           <div><label className="label">ইনভয়েস নম্বর</label>
             <input className="input" value={invoice} onChange={(e) => setInvoice(e.target.value)} /></div>
           <div><label className="label">ক্রয়মূল্য (৳ / একক)</label>
-            <input className="input" type="number" min={0} value={purchase} onChange={(e) => setPurchase(e.target.value)} /></div>
+            <input className="input" type="number" inputMode="decimal" step="0.01" min={0} value={purchase} onChange={(e) => setPurchase(e.target.value)} /></div>
           <div><label className="label">বিক্রয়মূল্য (৳ / একক)</label>
-            <input className="input" type="number" min={0} value={sale} onChange={(e) => setSale(e.target.value)} /></div>
+            <input className="input" type="number" inputMode="decimal" step="0.01" min={0} value={sale} onChange={(e) => setSale(e.target.value)} /></div>
         </div>
 
         {err && <p className="rounded bg-danger/10 px-3 py-2 text-danger">{err}</p>}
@@ -129,6 +177,78 @@ export default function AddStockPage() {
 
         <button className="btn-primary w-full" disabled={busy}>{busy ? L.common.loading : 'স্টক যোগ করুন'}</button>
       </form>
+
+      <div className="card space-y-3">
+        <h2 className="font-bold text-brand-dark">সাম্প্রতিক স্টক এন্ট্রি</h2>
+        <p className="text-xs text-gray-500">
+          ভুল পরিমাণ বা দাম সংশোধন করুন, অথবা পুরো এন্ট্রি বাতিল করুন। বাতিল করলে যোগ করা স্টক ফিরে যাবে।
+          বিক্রি হয়ে গেলে বাতিল করা যাবে না।
+        </p>
+        {entries.length === 0 && <p className="text-gray-400">কোনো এন্ট্রি নেই</p>}
+        <ul className="space-y-2">
+          {entries.map((r) => (
+            <li key={r.id} className={`rounded-xl px-3 py-2 ${
+              r.status === 'cancelled' ? 'bg-gray-100' : 'bg-gray-50'}`}>
+              {editId === r.id ? (
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                  <div><label className="label">পরিমাণ</label>
+                    <input className="input" type="number" min={1} value={ef.qty}
+                      onChange={(e) => setEf({ ...ef, qty: e.target.value })} /></div>
+                  <div><label className="label">ক্রয়মূল্য (৳)</label>
+                    <input className="input" type="number" inputMode="decimal" step="0.01" min={0} value={ef.purchase}
+                      onChange={(e) => setEf({ ...ef, purchase: e.target.value })} /></div>
+                  <div><label className="label">বিক্রয়মূল্য (৳)</label>
+                    <input className="input" type="number" inputMode="decimal" step="0.01" min={0} value={ef.sale}
+                      onChange={(e) => setEf({ ...ef, sale: e.target.value })} /></div>
+                  <div><label className="label">তারিখ</label>
+                    <input className="input" type="date" value={ef.date}
+                      onChange={(e) => setEf({ ...ef, date: e.target.value })} /></div>
+                  <div><label className="label">ইনভয়েস</label>
+                    <input className="input" value={ef.invoice}
+                      onChange={(e) => setEf({ ...ef, invoice: e.target.value })} /></div>
+                  <div><label className="label">নোট</label>
+                    <input className="input" value={ef.note}
+                      onChange={(e) => setEf({ ...ef, note: e.target.value })} /></div>
+                  <div className="flex gap-3 md:col-span-3">
+                    <button className="btn-primary" disabled={busy} onClick={saveEdit}>{L.common.save}</button>
+                    <button className="btn-outline" onClick={() => setEditId(null)}>{L.common.cancel}</button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex-1">
+                    <p className="font-semibold">
+                      {r.medicine_name} <StatusBadge status={r.status} />
+                    </p>
+                    <p className="text-xs text-gray-500">
+                      {toBanglaDigits(r.entry_date)} · {toBanglaDigits(r.qty)} একক · ক্রয় {formatTaka(r.purchase_price_paisa)}
+                      {r.batch_no ? ` · batch ${r.batch_no}` : ''}
+                      {r.invoice_no ? ` · ইনভয়েস ${r.invoice_no}` : ''}
+                    </p>
+                    {r.cancelled_reason && (
+                      <p className="text-xs text-danger">বাতিলের কারণ: {r.cancelled_reason}</p>
+                    )}
+                  </div>
+                  {r.status !== 'cancelled' && (
+                    <>
+                      <button className="rounded-lg border border-brand px-3 py-1 text-sm font-semibold text-brand"
+                        onClick={() => startEdit(r)}>
+                        {L.common.edit}
+                      </button>
+                      <CancelButton
+                        confirmText={`${r.medicine_name}-এর ${r.qty} একক স্টক এন্ট্রি বাতিল হবে এবং স্টক থেকে বাদ যাবে।`}
+                        onCancel={(reason) => cancelStockEntry(r.id, reason)}
+                        onError={setErr}
+                        onDone={async () => { setMsg('স্টক এন্ট্রি বাতিল হয়েছে'); await loadEntries(); }}
+                      />
+                    </>
+                  )}
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      </div>
     </div>
   );
 }
