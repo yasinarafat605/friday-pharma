@@ -1,0 +1,11 @@
+# Netlify build config (drag-drop হলে দরকার নেই, কিন্তু git-deploy-এর জন্য)।
+[build]
+  command = "npm run build"
+  publish = "out"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "no-referrer"

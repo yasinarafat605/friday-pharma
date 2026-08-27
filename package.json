@@ -1,0 +1,44 @@
+{
+  "name": "as-shifa-pharmacy",
+  "version": "0.1.0",
+  "private": true,
+  "description": "As-Shifa Pharmacy — offline-first local pharmacy management (single owner)",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "npx serve out",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "android:init": "cap add android",
+    "android:sync": "next build && cap sync android",
+    "android:open": "cap open android",
+    "android:icons": "capacitor-assets generate --android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.1.2",
+    "@capacitor/app": "^6.0.1",
+    "@capacitor/core": "^6.1.2",
+    "dexie": "^4.0.8",
+    "next": "14.2.15",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
+    "@capacitor/cli": "^6.1.2",
+    "@types/node": "^20.14.0",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.13",
+    "typescript": "^5.5.4",
+    "vitest": "^2.1.2"
+  },
+  "engines": {
+    "node": ">=18.18"
+  }
+}

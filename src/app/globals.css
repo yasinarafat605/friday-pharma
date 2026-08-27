@@ -1,0 +1,54 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-bangla: 'Noto Sans Bengali', 'Hind Siliguri', sans-serif;
+}
+
+html,
+body {
+  padding: 0;
+  margin: 0;
+  background: #f7faf8;
+  color: theme('colors.ink');
+  font-family: var(--font-bangla);
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* বড় action button — কম প্রযুক্তিগত ব্যবহারকারীর জন্য */
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl2 px-5 py-3 text-btn font-semibold transition active:scale-[0.98] focus:outline-none focus:ring-4;
+  }
+  .btn-primary {
+    @apply btn bg-brand text-white hover:bg-brand-dark focus:ring-brand/30;
+  }
+  .btn-outline {
+    @apply btn border-2 border-brand text-brand bg-white hover:bg-brand-light focus:ring-brand/20;
+  }
+  .btn-danger {
+    @apply btn bg-danger text-white hover:opacity-90 focus:ring-danger/30;
+  }
+  .card {
+    @apply rounded-xl2 bg-white p-5 shadow-sm border border-gray-100;
+  }
+  .input {
+    @apply w-full rounded-xl border-2 border-gray-200 px-4 py-3 text-base focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/20;
+  }
+  .label {
+    @apply mb-1 block text-sm font-medium text-gray-600;
+  }
+  .badge {
+    @apply inline-flex items-center rounded-full px-3 py-1 text-sm font-semibold;
+  }
+  .badge-normal {
+    @apply badge bg-success/10 text-success;
+  }
+  .badge-low {
+    @apply badge bg-alert/15 text-alert;
+  }
+  .badge-danger {
+    @apply badge bg-danger/10 text-danger;
+  }
+}
