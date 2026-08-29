@@ -5,13 +5,14 @@
 import Dexie, { type Table } from 'dexie';
 import { stampCreate, stampUpdate } from '@/lib/db/stamp';
 import { writeCheckpointInTransaction, type Checkpoint } from '@/lib/db/checkpoint';
+import { runBackfillInTransaction } from '@/lib/stock/backfill';
 import type {
   Medicine, MedicineBatch, Customer,
   MedicineType, UnitType, PaymentType, PaymentMethod,
   TxnStatus, AdjustmentReason, ExpenseSource, ExpenseCategory,
   StockEntry, Sale, SaleItem, CustomerLedger, DuePayment,
   Expense, CashSession, StockAdjustment, SaleReturn, SaleReturnItem,
-  AuditLog, AppSettings, SyncState, SyncFailure,
+  AuditLog, AppSettings, SyncState, SyncFailure, StockMovement,
 } from '@/types/db';
 
 export const DEFAULT_PHONE = '+8801890163791';
@@ -34,6 +35,7 @@ export class LocalDB extends Dexie {
   sale_return_items!: Table<SaleReturnItem, string>;
   audit_logs!: Table<AuditLog, string>;
   // সিঙ্কের নিজস্ব টেবিল — এগুলো নিজে সার্ভারে যায় না
+  stock_movements!: Table<StockMovement, string>;
   sync_state!: Table<SyncState, string>;
   sync_failures!: Table<SyncFailure, string>;
   _checkpoints!: Table<Checkpoint, string>;
@@ -109,28 +111,73 @@ export class LocalDB extends Dexie {
         reason: 'schema 2 → 3 (সিঙ্কের প্রস্তুতি)',
         fromVersion: 2,
         toVersion: 3,
-        tables: SYNCED_TABLES,
+        tables: SYNCED_TABLES_V3,
       });
 
       // ২. পুরোনো সব সারি এখনো সার্ভারে যায়নি, তাই সবগুলো পাঠানোর তালিকায়।
       //    প্রথমবার লগইনের পর এগুলোই মালিকের অ্যাকাউন্টে উঠে যাবে।
-      for (const name of SYNCED_TABLES) {
+      for (const name of SYNCED_TABLES_V3) {
         await tx.table(name).toCollection().modify((row: Record<string, unknown>) => {
           row.dirty = 1;
         });
       }
     });
 
+    // v4 — স্টকের পরিমাণ আর সরাসরি বদলানো হয় না; প্রতিটি নড়াচড়া
+    // আলাদা সারি হিসেবে জমা হয়। দুই ডিভাইসে অফলাইনে বিক্রি হলেও
+    // একজনের বিক্রয় আর হারায় না।
+    this.version(4).stores({
+      stock_movements: 'id, batch_id, medicine_id, business_date, created_at, client_txn_id, updated_at, deleted_at, dirty',
+    }).upgrade(async (tx) => {
+      await writeCheckpointInTransaction(tx, {
+        reason: 'schema 3 → 4 (স্টকের নড়াচড়া)',
+        fromVersion: 3,
+        toVersion: 4,
+        tables: SYNCED_TABLES_V3,
+      });
+      // মিলিয়ে দেখতে না পারলে এটি ছুঁড়ে দেয় এবং Dexie পুরো upgrade বাতিল
+      // করে — schema v3-তেই থেকে যায়, কাউন্টারই সত্যের উৎস থাকে।
+      const r = await runBackfillInTransaction(tx);
+      if (!r.skipped) {
+        console.info(`[Friday Pharma] স্টকের ইতিহাস তৈরি: ${r.created} টি নড়াচড়া`
+          + (r.reconciled.length ? `, ${r.reconciled.length} টি ব্যাচে প্রারম্ভিক জের` : ''));
+        for (const w of r.warnings) console.warn('[Friday Pharma]', w);
+      }
+    });
+
     attachSyncHooks(this);
+    attachAppendOnlyGuard(this);
   }
 }
 
-/** সিঙ্কের ফিল্ড বসে যেসব টেবিলে (settings ছাড়া বাকি সব)। */
-const SYNCED_TABLES = [
+/**
+ * স্টকের নড়াচড়া কখনো বদলানো বা মোছা যায় না (নিয়ম I7)।
+ * ভুল হলে উল্টো চিহ্নের নতুন সারি লিখতে হয়।
+ * এটি শুধু নিয়ম নয় — ডেটাবেসই আটকে দেয়।
+ */
+function attachAppendOnlyGuard(d: LocalDB) {
+  const refuse = (what: string) => () => {
+    throw new Error(
+      `স্টকের নড়াচড়া ${what} যায় না — ভুল হলে উল্টো নড়াচড়া লিখুন`,
+    );
+  };
+  d.stock_movements.hook('updating', refuse('বদলানো'));
+  d.stock_movements.hook('deleting', refuse('মোছা'));
+}
+
+/**
+ * v3 upgrade যে তালিকা ধরে চলেছিল। **এটি বদলানো যাবে না** — এখনো v2-তে
+ * থাকা কোনো ডিভাইস v3-এর upgrade চালাবে, আর তখন পরের version-এ তৈরি হওয়া
+ * store এখানে থাকলে সেটি খুঁজতে গিয়ে ব্যর্থ হতো।
+ */
+const SYNCED_TABLES_V3 = [
   'medicines', 'batches', 'stock_entries', 'customers', 'customer_ledger',
   'sales', 'sale_items', 'due_payments', 'expense_categories', 'expenses',
   'cash_sessions', 'stock_adjustments', 'sale_returns', 'sale_return_items',
 ] as const;
+
+/** এখনকার সিঙ্ক-যোগ্য টেবিল — hook এই তালিকা ধরে ফিল্ড বসায়। */
+const SYNCED_TABLES = [...SYNCED_TABLES_V3, 'stock_movements'] as const;
 
 /**
  * প্রতিটি লেখায় pharmacy_id ও updated_at নিজে থেকেই বসে যায়।

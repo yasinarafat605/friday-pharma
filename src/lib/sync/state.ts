@@ -16,6 +16,7 @@ export const SYNC_TABLES = [
   'medicines', 'batches', 'stock_entries', 'customers', 'customer_ledger',
   'sales', 'sale_items', 'due_payments', 'expense_categories', 'expenses',
   'cash_sessions', 'stock_adjustments', 'sale_returns', 'sale_return_items',
+  'stock_movements',
 ] as const;
 
 export type SyncTable = (typeof SYNC_TABLES)[number];

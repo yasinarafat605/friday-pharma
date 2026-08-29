@@ -8,6 +8,19 @@ import {
 } from '@/lib/db/local';
 import { isExpired, thresholdFor } from '@/lib/business-rules';
 import { toBanglaDigits } from '@/lib/money';
+import { buildMovement, computeAllBatchQty } from '@/lib/stock/movements';
+
+/**
+ * স্টকের পরিমাণ কোথা থেকে পড়া হবে।
+ *
+ * 'movements' — নড়াচড়ার যোগফল (স্বাভাবিক)।
+ * 'counter'   — ব্যাচে লেখা পুরোনো সংখ্যা।
+ *
+ * নড়াচড়ায় সমস্যা দেখা দিলে এই একটি শব্দ বদলে পুরোনো আচরণে ফেরা যায়।
+ * কাউন্টার এখনো প্রতিটি লেখায় হালনাগাদ হয়, তাই সেটি সঠিকই থাকে।
+ * এটিই P2-র rollback ব্যবস্থা — তাই কাউন্টার সরানো যাবে না।
+ */
+const STOCK_SOURCE: 'movements' | 'counter' = 'movements';
 import type {
   StockRow, Customer, SaleItemInput, AdjustmentReason, Medicine, MedicineBatch,
   MedicineType, UnitType, AppSettings, ExpenseCategory, Expense,
@@ -72,19 +85,23 @@ export async function fetchStockRows(): Promise<StockRow[]> {
     getSettings(),
   ]);
   const medMap = new Map(meds.map((m) => [m.id, m]));
+  // নড়াচড়া থেকে হিসাব করা পরিমাণ। যে ব্যাচে কোনো নড়াচড়া নেই (যেমন
+  // মাইগ্রেশন হয়নি এমন ডিভাইস) সেখানে ব্যাচের নিজের সংখ্যাই ব্যবহার হয়।
+  const computed = STOCK_SOURCE === 'movements' ? await computeAllBatchQty() : new Map<string, number>();
   const today = new Date();
   const rows: StockRow[] = [];
   for (const b of batches) {
     const m = medMap.get(b.medicine_id);
     if (!m || !m.is_active) continue;
+    const qty = computed.has(b.id) ? computed.get(b.id)! : b.qty_in_stock;
     const th = m.low_stock_threshold ?? typeThreshold(m.type, settings);
     const status: StockRow['stock_status'] =
-      b.qty_in_stock <= 0 ? 'out' : b.qty_in_stock <= th ? 'low' : 'normal';
+      qty <= 0 ? 'out' : qty <= th ? 'low' : 'normal';
     rows.push({
       batch_id: b.id, medicine_id: m.id, name: m.name, bn_name: m.bn_name,
       strength: m.strength ?? null,
       generic_name: m.generic_name, company: m.company, type: m.type, unit: m.unit,
-      batch_no: b.batch_no, expiry_date: b.expiry_date, qty_in_stock: b.qty_in_stock,
+      batch_no: b.batch_no, expiry_date: b.expiry_date, qty_in_stock: qty,
       purchase_price_paisa: b.purchase_price_paisa, sale_price_paisa: b.sale_price_paisa,
       threshold: th, stock_status: status, expiry_status: expiryTag(b.expiry_date, today),
     });
@@ -391,7 +408,7 @@ export async function createSale(input: {
   const discount = Math.max(0, Math.round(input.discount_paisa || 0));
 
   return d.transaction('rw',
-    [d.sales, d.sale_items, d.batches, d.customers, d.customer_ledger, d.audit_logs],
+    [d.stock_movements, d.sales, d.sale_items, d.batches, d.customers, d.customer_ledger, d.audit_logs],
     async () => {
       let subtotal = 0;
       const itemRows = [];
@@ -412,6 +429,10 @@ export async function createSale(input: {
           cost_price_paisa: batch.purchase_price_paisa, line_total_paisa: line,
         });
         await d.batches.put({ ...batch, qty_in_stock: batch.qty_in_stock - it.qty });
+        await d.stock_movements.add(buildMovement({
+          batch_id: batch.id, medicine_id: it.medicine_id, qty_delta: -it.qty,
+          reason: 'sale', ref_type: 'sale_item', ref_id: itemRows[itemRows.length - 1]!.id,
+        }));
       }
 
       const total = subtotal - discount;
@@ -494,7 +515,7 @@ export async function addStock(input: {
 }) {
   const d = db();
   if (input.qty <= 0) throw new Error('পরিমাণ ০-এর বেশি হতে হবে');
-  return d.transaction('rw', [d.batches, d.stock_entries, d.audit_logs], async () => {
+  return d.transaction('rw', [d.stock_movements, d.batches, d.stock_entries, d.audit_logs], async () => {
     const existing = await d.batches
       .where('medicine_id').equals(input.medicine_id)
       .filter((b) => (b.batch_no ?? '') === (input.batch_no ?? ''))
@@ -524,6 +545,11 @@ export async function addStock(input: {
       entry_date: input.entry_date, invoice_no: input.invoice_no ?? null, note: input.note ?? null,
       created_at: nowISO(), status: 'completed',
     });
+    await d.stock_movements.add(buildMovement({
+      batch_id: batchId, medicine_id: input.medicine_id, qty_delta: input.qty,
+      reason: 'purchase', ref_type: 'stock_entry', ref_id: entryId,
+      business_date: input.entry_date,
+    }));
     await audit('stock_entry', entryId, 'create', { batch_id: batchId, qty: input.qty });
     return { entry_id: entryId, batch_id: batchId };
   });
@@ -557,12 +583,17 @@ export async function adjustStock(input: {
   const d = db();
   if (input.qty === 0) throw new Error('পরিমাণ ০ হতে পারবে না');
   if (!input.reason) throw new Error('কারণ বাধ্যতামূলক');
-  return d.transaction('rw', [d.batches, d.stock_adjustments, d.audit_logs], async () => {
+  return d.transaction('rw', [d.stock_movements, d.batches, d.stock_adjustments, d.audit_logs], async () => {
     const b = await d.batches.get(input.batch_id);
     if (!b) throw new Error('batch পাওয়া যায়নি');
     if (b.qty_in_stock + input.qty < 0) throw new Error('স্টক negative হতে পারবে না');
     await d.batches.put({ ...b, qty_in_stock: b.qty_in_stock + input.qty });
     const id = uuid();
+    await d.stock_movements.add(buildMovement({
+      batch_id: b.id, medicine_id: b.medicine_id, qty_delta: input.qty,
+      reason: 'adjustment', ref_type: 'stock_adjustment', ref_id: id,
+      note: input.reason,
+    }));
     await d.stock_adjustments.add({
       id, client_txn_id: newClientTxnId('adj'), batch_id: input.batch_id, qty: input.qty,
       reason: input.reason, note: input.note ?? null, adjusted_at: nowISO(), status: 'completed',
@@ -612,7 +643,7 @@ export async function createSaleReturn(input: {
   if (input.items.length === 0) throw new Error('অন্তত একটি ওষুধ নির্বাচন করুন');
   if (!input.reason?.trim()) throw new Error('রিটার্নের কারণ দিন');
   return d.transaction('rw',
-    [d.sales, d.sale_items, d.sale_returns, d.sale_return_items, d.batches, d.customers, d.customer_ledger, d.audit_logs],
+    [d.stock_movements, d.sales, d.sale_items, d.sale_returns, d.sale_return_items, d.batches, d.customers, d.customer_ledger, d.audit_logs],
     async () => {
       const sale = await d.sales.get(input.sale_id);
       if (!sale) throw new Error('বিক্রয় পাওয়া যায়নি');
@@ -632,13 +663,20 @@ export async function createSaleReturn(input: {
         if (!si || si.sale_id !== input.sale_id) throw new Error('বিক্রয় আইটেম পাওয়া যায়নি');
         if (it.qty > si.qty) throw new Error('রিটার্ন পরিমাণ বিক্রীত পরিমাণের বেশি');
         returnedValue += Math.round(si.unit_price_paisa * it.qty);
+        const returnItemId = uuid();
         await d.sale_return_items.add({
-          id: uuid(), return_id: retId, sale_item_id: si.id, batch_id: it.batch_id,
+          id: returnItemId, return_id: retId, sale_item_id: si.id, batch_id: it.batch_id,
           qty: it.qty, restock: it.restock,
         });
         if (it.restock) {
           const b = await d.batches.get(it.batch_id);
-          if (b) await d.batches.put({ ...b, qty_in_stock: b.qty_in_stock + it.qty });
+          if (b) {
+            await d.batches.put({ ...b, qty_in_stock: b.qty_in_stock + it.qty });
+            await d.stock_movements.add(buildMovement({
+              batch_id: b.id, medicine_id: b.medicine_id, qty_delta: it.qty,
+              reason: 'return', ref_type: 'sale_return_item', ref_id: returnItemId,
+            }));
+          }
         }
       }
 
@@ -967,7 +1005,7 @@ export async function cancelSale(saleId: string, reason: string): Promise<void> 
   const d = db();
   if (!reason.trim()) throw new Error('বাতিলের কারণ লিখুন');
   await d.transaction('rw',
-    [d.sales, d.sale_items, d.batches, d.customers, d.customer_ledger, d.sale_returns, d.audit_logs],
+    [d.stock_movements, d.sales, d.sale_items, d.batches, d.customers, d.customer_ledger, d.sale_returns, d.audit_logs],
     async () => {
       const sale = await d.sales.get(saleId);
       if (!sale) throw new Error('বিক্রয় পাওয়া যায়নি');
@@ -979,7 +1017,14 @@ export async function cancelSale(saleId: string, reason: string): Promise<void> 
       const items = await d.sale_items.where('sale_id').equals(saleId).toArray();
       for (const it of items) {
         const b = await d.batches.get(it.batch_id);
-        if (b) await d.batches.put({ ...b, qty_in_stock: b.qty_in_stock + it.qty });
+        if (b) {
+          await d.batches.put({ ...b, qty_in_stock: b.qty_in_stock + it.qty });
+          await d.stock_movements.add(buildMovement({
+            batch_id: b.id, medicine_id: it.medicine_id, qty_delta: it.qty,
+            reason: 'reversal', ref_type: 'sale_item', ref_id: it.id,
+            note: 'বিক্রয় বাতিল',
+          }));
+        }
       }
       if (sale.customer_id) {
         const ledger = await d.customer_ledger
@@ -1165,7 +1210,7 @@ export async function updateStockEntry(id: string, patch: {
   entry_date?: string; invoice_no?: string | null; note?: string | null;
 }): Promise<void> {
   const d = db();
-  await d.transaction('rw', [d.stock_entries, d.batches, d.audit_logs], async () => {
+  await d.transaction('rw', [d.stock_movements, d.stock_entries, d.batches, d.audit_logs], async () => {
     const cur = await d.stock_entries.get(id);
     if (!cur) throw new Error('স্টক এন্ট্রি পাওয়া যায়নি');
     if (!isActive(cur)) throw new Error('বাতিল এন্ট্রি সংশোধন করা যায় না');
@@ -1193,6 +1238,13 @@ export async function updateStockEntry(id: string, patch: {
       purchase_price_paisa: setsBatchPrice ? Math.round(purchase) : batch.purchase_price_paisa,
       sale_price_paisa: setsBatchPrice ? Math.round(sale) : batch.sale_price_paisa,
     });
+    if (delta !== 0) {
+      await d.stock_movements.add(buildMovement({
+        batch_id: batch.id, medicine_id: batch.medicine_id, qty_delta: delta,
+        reason: 'adjustment', ref_type: 'stock_entry', ref_id: id,
+        note: 'স্টক এন্ট্রি সংশোধন',
+      }));
+    }
     const next: StockEntry = {
       ...cur, ...patch,
       qty, purchase_price_paisa: Math.round(purchase), sale_price_paisa: Math.round(sale),
@@ -1206,7 +1258,7 @@ export async function updateStockEntry(id: string, patch: {
 export async function cancelStockEntry(id: string, reason: string): Promise<void> {
   const d = db();
   if (!reason.trim()) throw new Error('বাতিলের কারণ লিখুন');
-  await d.transaction('rw', [d.stock_entries, d.batches, d.audit_logs], async () => {
+  await d.transaction('rw', [d.stock_movements, d.stock_entries, d.batches, d.audit_logs], async () => {
     const cur = await d.stock_entries.get(id);
     if (!cur) throw new Error('স্টক এন্ট্রি পাওয়া যায়নি');
     if (!isActive(cur)) throw new Error('এই এন্ট্রি আগেই বাতিল হয়েছে');
@@ -1216,6 +1268,11 @@ export async function cancelStockEntry(id: string, reason: string): Promise<void
       throw new Error(`স্টকে আছে ${toBanglaDigits(batch.qty_in_stock)}, এন্ট্রি ছিল ${toBanglaDigits(cur.qty)} — কিছু আগেই বিক্রি হয়েছে, বাতিল করা যাবে না`);
     }
     await d.batches.put({ ...batch, qty_in_stock: batch.qty_in_stock - cur.qty });
+    await d.stock_movements.add(buildMovement({
+      batch_id: batch.id, medicine_id: batch.medicine_id, qty_delta: -cur.qty,
+      reason: 'reversal', ref_type: 'stock_entry', ref_id: id,
+      note: 'স্টক এন্ট্রি বাতিল',
+    }));
     await d.stock_entries.put({ ...cur, status: 'cancelled', cancelled_reason: reason.trim() });
     await audit('stock_entry', id, 'cancel', { reason: reason.trim() }, cur);
   });
@@ -1249,7 +1306,7 @@ export async function fetchRecentAdjustments(limit = 50): Promise<StockAdjustmen
 export async function cancelStockAdjustment(id: string, reason: string): Promise<void> {
   const d = db();
   if (!reason.trim()) throw new Error('বাতিলের কারণ লিখুন');
-  await d.transaction('rw', [d.stock_adjustments, d.batches, d.audit_logs], async () => {
+  await d.transaction('rw', [d.stock_movements, d.stock_adjustments, d.batches, d.audit_logs], async () => {
     const cur = await d.stock_adjustments.get(id);
     if (!cur) throw new Error('সমন্বয় পাওয়া যায়নি');
     if (!isActive(cur)) throw new Error('এই সমন্বয় আগেই বাতিল হয়েছে');
@@ -1257,6 +1314,11 @@ export async function cancelStockAdjustment(id: string, reason: string): Promise
     if (!batch) throw new Error('batch পাওয়া যায়নি');
     if (batch.qty_in_stock - cur.qty < 0) throw new Error('স্টক negative হয়ে যাবে, বাতিল করা যাবে না');
     await d.batches.put({ ...batch, qty_in_stock: batch.qty_in_stock - cur.qty });
+    await d.stock_movements.add(buildMovement({
+      batch_id: batch.id, medicine_id: batch.medicine_id, qty_delta: -cur.qty,
+      reason: 'reversal', ref_type: 'stock_adjustment', ref_id: id,
+      note: 'সমন্বয় বাতিল',
+    }));
     await d.stock_adjustments.put({ ...cur, status: 'cancelled', cancelled_reason: reason.trim() });
     await audit('stock_adjustment', id, 'cancel', { reason: reason.trim() }, cur);
   });
@@ -1290,7 +1352,7 @@ export async function cancelSaleReturn(id: string, reason: string): Promise<void
   const d = db();
   if (!reason.trim()) throw new Error('বাতিলের কারণ লিখুন');
   await d.transaction('rw',
-    [d.sale_returns, d.sale_return_items, d.sales, d.batches, d.customers, d.customer_ledger, d.audit_logs],
+    [d.stock_movements, d.sale_returns, d.sale_return_items, d.sales, d.batches, d.customers, d.customer_ledger, d.audit_logs],
     async () => {
       const cur = await d.sale_returns.get(id);
       if (!cur) throw new Error('রিটার্ন পাওয়া যায়নি');
@@ -1304,6 +1366,11 @@ export async function cancelSaleReturn(id: string, reason: string): Promise<void
           throw new Error('ফেরত আসা স্টক আবার বিক্রি হয়ে গেছে, রিটার্ন বাতিল করা যাবে না');
         }
         await d.batches.put({ ...b, qty_in_stock: b.qty_in_stock - it.qty });
+        await d.stock_movements.add(buildMovement({
+          batch_id: b.id, medicine_id: b.medicine_id, qty_delta: -it.qty,
+          reason: 'reversal', ref_type: 'sale_return_item', ref_id: it.id,
+          note: 'রিটার্ন বাতিল',
+        }));
       }
       const sale = await d.sales.get(cur.sale_id);
       if (sale?.customer_id) {

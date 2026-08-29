@@ -7,6 +7,7 @@ import {
 } from '@/lib/data';
 import { setPin, isValidPinFormat, PIN_LENGTH } from '@/lib/auth';
 import { backupStatus } from '@/lib/business-rules';
+import { verifyStockIntegrity, type IntegrityReport } from '@/lib/stock/movements';
 import { toBanglaDigits } from '@/lib/money';
 import { L } from '@/lib/i18n/labels';
 import type { AppSettings, ExpenseCategory } from '@/types/db';
@@ -90,6 +91,85 @@ export default function SettingsPage() {
       </div>
 
       <CategoryManager onError={setErr} onMsg={setMsg} />
+      <StockIntegrity onError={setErr} />
+    </div>
+  );
+}
+
+/**
+ * স্টকের হিসাব মিলিয়ে দেখা।
+ * প্রতিটি নড়াচড়া যোগ করে ব্যাচে লেখা সংখ্যার সাথে মিলিয়ে দেখে।
+ * না মিললে কোন ওষুধে কত পার্থক্য তা দেখায়।
+ */
+function StockIntegrity({ onError }: { onError: (t: string) => void }) {
+  const [report, setReport] = useState<IntegrityReport | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function run() {
+    setBusy(true);
+    setReport(null);
+    try {
+      setReport(await verifyStockIntegrity());
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'যাচাই ব্যর্থ');
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="card space-y-3">
+      <h2 className="font-bold text-brand-dark">স্টকের হিসাব</h2>
+      <p className="text-sm text-gray-600">
+        প্রতিটি ওষুধের স্টক কীভাবে এই সংখ্যায় পৌঁছাল, তার পুরো হিসাব মিলিয়ে দেখা হয়।
+        সন্দেহ হলে যেকোনো সময় চালাতে পারেন।
+      </p>
+      <button className="btn-outline" disabled={busy} onClick={run}>
+        {busy ? 'মেলানো হচ্ছে…' : 'স্টকের হিসাব মিলিয়ে দেখুন'}
+      </button>
+
+      {report && !report.hasMovements && (
+        <p className="rounded bg-alert/10 px-3 py-2 text-sm text-alert">
+          এখনো স্টকের নড়াচড়ার হিসাব তৈরি হয়নি। অ্যাপটি একবার বন্ধ করে আবার খুলুন।
+        </p>
+      )}
+
+      {report && report.hasMovements && report.ok && (
+        <p className="rounded bg-success/10 px-3 py-2 text-sm text-success">
+          সব ঠিক আছে — {toBanglaDigits(report.checked)} টি ব্যাচের হিসাব মিলেছে।
+        </p>
+      )}
+
+      {report && report.hasMovements && !report.ok && (
+        <div className="space-y-2">
+          <p className="rounded bg-danger/10 px-3 py-2 text-sm text-danger">
+            {toBanglaDigits(report.mismatches.length)} টি ব্যাচে হিসাব মেলেনি।
+            নিচের তালিকা দেখে জানান।
+          </p>
+          <div className="overflow-x-auto rounded-xl border border-gray-100">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-gray-50 text-gray-600">
+                <tr>
+                  <th className="px-3 py-2">ব্যাচ</th>
+                  <th className="px-3 py-2 text-right">লেখা আছে</th>
+                  <th className="px-3 py-2 text-right">হিসাবে আসে</th>
+                  <th className="px-3 py-2 text-right">পার্থক্য</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.mismatches.slice(0, 20).map((m) => (
+                  <tr key={m.batch_id} className="border-t border-gray-100">
+                    <td className="px-3 py-2 font-mono text-xs">{m.batch_id.slice(0, 8)}</td>
+                    <td className="px-3 py-2 text-right">{toBanglaDigits(m.counter)}</td>
+                    <td className="px-3 py-2 text-right">{toBanglaDigits(m.computed)}</td>
+                    <td className="px-3 py-2 text-right font-semibold text-danger">
+                      {toBanglaDigits(m.difference)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

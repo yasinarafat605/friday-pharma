@@ -205,6 +205,40 @@ export interface CashSession extends SyncFields {
   note?: string | null;
 }
 
+/** স্টক কেন নড়ল। */
+export type MovementReason =
+  | 'opening_balance'   // অ্যাপ শুরুর আগের বা মেলাতে না পারা পরিমাণ
+  | 'purchase'          // নতুন স্টক এসেছে
+  | 'sale'              // বিক্রি হয়েছে
+  | 'adjustment'        // নষ্ট, হারানো, ভুল সংশোধন
+  | 'return'            // গ্রাহক ফেরত দিয়েছেন, স্টকে ফিরেছে
+  | 'write_off'         // মেয়াদ শেষ, বাদ দেওয়া হয়েছে
+  | 'reversal';         // উপরের কোনো কিছু বাতিল হয়েছে
+
+/**
+ * স্টকের প্রতিটি নড়াচড়া — শুধু যোগ হয়, কখনো বদলায় না, কখনো মোছে না।
+ *
+ * ব্যাচের পরিমাণ আর সরাসরি বদলানো হয় না; এই সারিগুলো যোগ করে বের হয়।
+ * কারণ দুটি ডিভাইস অফলাইনে থাকলে দুজনেই পুরো সংখ্যাটি লিখত এবং একজনের
+ * বিক্রয় নিঃশব্দে হারিয়ে যেত। আলাদা আলাদা নড়াচড়া কখনো একে অপরকে মোছে না।
+ */
+export interface StockMovement extends SyncFields {
+  id: string;
+  batch_id: string;
+  medicine_id: string;
+  /** চিহ্নসহ: বিক্রয়ে ঋণাত্মক, ক্রয়ে ধনাত্মক। */
+  qty_delta: number;
+  reason: MovementReason;
+  /** কোন রেকর্ডের কারণে — যেমন 'sale_item', 'stock_entry'। */
+  ref_type?: string | null;
+  ref_id?: string | null;
+  /** স্থানীয় দিনপঞ্জির তারিখ, রিপোর্টের জন্য। */
+  business_date: string;
+  created_at: string;
+  client_txn_id: string;
+  note?: string | null;
+}
+
 export interface StockAdjustment extends SyncFields {
   id: string;
   client_txn_id: string;
