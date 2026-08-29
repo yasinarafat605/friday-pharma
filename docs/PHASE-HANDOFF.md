@@ -220,6 +220,11 @@ already diagnosed and fixed.
 > **P2 planning: migrate inventory from mutable `qty_in_stock` to immutable
 > `stock_movements` without changing visible stock.**
 
+**Read `docs/P2-INVARIANTS.md` first.** It defines the eight conditions the
+migration must prove and where each is tested. The migration does not ship
+unless I1 through I5 pass against real data, not fixtures. That document is
+binding, not advisory.
+
 The approved approach, from the implementation plan:
 
 - Add an append-only `stock_movements` store. Movements are never edited or
@@ -242,6 +247,9 @@ The approved approach, from the implementation plan:
 - The nine transactions that mutate stock gain `stock_movements` in their
   scope. Unlike the outbox case in P1, this is correct — a stock movement is
   business data and must commit atomically with the sale that caused it.
+- `verifyStockIntegrity()` ships as a permanent function with a button in
+  settings, not as migration-only scaffolding. It is the check that later
+  proves a multi-device sync merged correctly.
 
 ---
 
@@ -271,6 +279,7 @@ The approved approach, from the implementation plan:
   anywhere, so they are still free to change (this is why P3 is cheap now)
 
 **Planning**
+- `docs/P2-INVARIANTS.md` — **binding** conditions and tests for P2
 - `docs/SAAS-ROADMAP.md` — the phase plan and cost reality
 - `docs/00-PROJECT-PLAN.md` — the original design, partly historical
 
@@ -293,3 +302,8 @@ The approved approach, from the implementation plan:
   half-applying.
 - **Do not select rows to push by timestamp.** Use `dirty`. See decision 1.
 - **Do not apply server data without `dirty: 0`.** See decision 3.
+- **Do not ship P2 without the invariant tests in `docs/P2-INVARIANTS.md`.**
+  Particularly I3: the abort path must be exercised by a test that deliberately
+  breaks a batch. An untested abort path is not an abort path.
+- **Do not edit or delete a `stock_movements` row.** Write an opposite movement
+  instead. A hook will enforce this once P2 lands.
