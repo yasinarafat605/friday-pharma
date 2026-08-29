@@ -3,13 +3,15 @@
 // সম্পূর্ণ local database (IndexedDB via Dexie) — কোনো cloud/Supabase নেই।
 // এই ডিভাইসেই সব ডেটা; সব হিসাব ও নিয়ম client-side transaction-এ enforce হয়।
 import Dexie, { type Table } from 'dexie';
+import { stampCreate, stampUpdate } from '@/lib/db/stamp';
+import { writeCheckpointInTransaction, type Checkpoint } from '@/lib/db/checkpoint';
 import type {
   Medicine, MedicineBatch, Customer,
   MedicineType, UnitType, PaymentType, PaymentMethod,
   TxnStatus, AdjustmentReason, ExpenseSource, ExpenseCategory,
   StockEntry, Sale, SaleItem, CustomerLedger, DuePayment,
   Expense, CashSession, StockAdjustment, SaleReturn, SaleReturnItem,
-  AuditLog, AppSettings,
+  AuditLog, AppSettings, SyncState, SyncFailure,
 } from '@/types/db';
 
 export const DEFAULT_PHONE = '+8801890163791';
@@ -31,6 +33,10 @@ export class LocalDB extends Dexie {
   sale_returns!: Table<SaleReturn, string>;
   sale_return_items!: Table<SaleReturnItem, string>;
   audit_logs!: Table<AuditLog, string>;
+  // সিঙ্কের নিজস্ব টেবিল — এগুলো নিজে সার্ভারে যায় না
+  sync_state!: Table<SyncState, string>;
+  sync_failures!: Table<SyncFailure, string>;
+  _checkpoints!: Table<Checkpoint, string>;
 
   constructor() {
     super('asshifa_local');
@@ -74,6 +80,47 @@ export class LocalDB extends Dexie {
       audit_logs: 'id, entity, created_at, updated_at',
     });
 
+    // v3 — সিঙ্কের প্রস্তুতি: কোন সারি পাঠানো বাকি তা চেনার জন্য `dirty`,
+    // আর সিঙ্কের নিজের অবস্থা রাখার টেবিলগুলো।
+    this.version(3).stores({
+      settings: 'id',
+      medicines: 'id, name, generic_name, company, type, is_active, updated_at, deleted_at, dirty',
+      batches: 'id, medicine_id, expiry_date, qty_in_stock, updated_at, deleted_at, dirty',
+      stock_entries: 'id, batch_id, entry_date, client_txn_id, updated_at, deleted_at, dirty',
+      customers: 'id, name, phone, village, current_due_paisa, updated_at, deleted_at, dirty',
+      customer_ledger: 'id, customer_id, entry_date, updated_at, deleted_at, dirty',
+      sales: 'id, txn_no, sale_date, customer_id, status, client_txn_id, updated_at, deleted_at, dirty',
+      sale_items: 'id, sale_id, medicine_id, batch_id, updated_at, deleted_at, dirty',
+      due_payments: 'id, customer_id, pay_date, method, status, client_txn_id, updated_at, deleted_at, dirty',
+      expense_categories: 'id, name, sort_order, updated_at, deleted_at, dirty',
+      expenses: 'id, category_id, expense_date, payment_source, status, client_txn_id, updated_at, deleted_at, dirty',
+      cash_sessions: 'id, session_date, updated_at, deleted_at, dirty',
+      stock_adjustments: 'id, batch_id, adjusted_at, client_txn_id, updated_at, deleted_at, dirty',
+      sale_returns: 'id, sale_id, return_date, client_txn_id, updated_at, deleted_at, dirty',
+      sale_return_items: 'id, return_id, sale_item_id, batch_id, updated_at, deleted_at, dirty',
+      audit_logs: 'id, entity, created_at, updated_at',
+      sync_state: 'table_name',
+      sync_failures: 'id, table_name, row_id, next_retry_at',
+      _checkpoints: 'id, created_at',
+    }).upgrade(async (tx) => {
+      // ১. বদলানোর আগে পুরো ডেটার ছবি — একই transaction, তাই ছবি ও
+      //    পরিবর্তন একসাথে সফল হয় বা একসাথে বাতিল হয়।
+      await writeCheckpointInTransaction(tx, {
+        reason: 'schema 2 → 3 (সিঙ্কের প্রস্তুতি)',
+        fromVersion: 2,
+        toVersion: 3,
+        tables: SYNCED_TABLES,
+      });
+
+      // ২. পুরোনো সব সারি এখনো সার্ভারে যায়নি, তাই সবগুলো পাঠানোর তালিকায়।
+      //    প্রথমবার লগইনের পর এগুলোই মালিকের অ্যাকাউন্টে উঠে যাবে।
+      for (const name of SYNCED_TABLES) {
+        await tx.table(name).toCollection().modify((row: Record<string, unknown>) => {
+          row.dirty = 1;
+        });
+      }
+    });
+
     attachSyncHooks(this);
   }
 }
@@ -95,16 +142,14 @@ function attachSyncHooks(d: LocalDB) {
     const table = (d as unknown as Record<string, Table<Record<string, unknown>, string>>)[name];
     if (!table) continue;
     table.hook('creating', (_pk, obj) => {
-      if (!obj.pharmacy_id) obj.pharmacy_id = currentPharmacyId();
-      if (!obj.updated_at) obj.updated_at = new Date().toISOString();
-      if (obj.deleted_at === undefined) obj.deleted_at = null;
+      stampCreate(obj, currentPharmacyId(), new Date().toISOString());
     });
-    table.hook('updating', (mods, _pk, obj) => {
-      const m = mods as Record<string, unknown>;
-      const next: Record<string, unknown> = { updated_at: new Date().toISOString() };
-      if (!obj.pharmacy_id && m.pharmacy_id === undefined) next.pharmacy_id = currentPharmacyId();
-      return next;
-    });
+    table.hook('updating', (mods, _pk, obj) => stampUpdate(
+      mods as Record<string, unknown>,
+      obj as Record<string, unknown>,
+      currentPharmacyId(),
+      new Date().toISOString(),
+    ));
   }
 }
 

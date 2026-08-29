@@ -6,11 +6,34 @@
  * updated_at  — শেষ কবে বদলেছে; সার্ভারে কী পাঠাতে হবে তা এখান থেকেই ঠিক হয়।
  * deleted_at  — মুছে ফেলা রেকর্ড সত্যিই মোছা হয় না, চিহ্ন দেওয়া হয়, যাতে
  *               মুছে ফেলার খবরটিও অন্য ডিভাইসে পৌঁছায়।
+ * dirty       — ১ হলে সারিটি এখনো সার্ভারে পাঠানো হয়নি। সিঙ্ক ইঞ্জিন
+ *               পাঠানোর পর ০ বসায়। কোনটা পাঠাতে হবে তা এখান থেকেই ঠিক হয়,
+ *               সময় মিলিয়ে নয় — নইলে সার্ভার থেকে নামানো সারিও বদলেছে মনে হতো।
  */
 export interface SyncFields {
   pharmacy_id?: string;
   updated_at?: string;
   deleted_at?: string | null;
+  dirty?: 0 | 1;
+}
+
+/** প্রতি টেবিলে সিঙ্ক কতদূর এগিয়েছে। এই সারিগুলো নিজে সিঙ্ক হয় না। */
+export interface SyncState {
+  table_name: string;
+  last_pulled_at?: string | null;
+  last_pushed_at?: string | null;
+  last_error?: string | null;
+}
+
+/** যে সারিগুলো পাঠানো যায়নি — কতবার চেষ্টা হয়েছে ও পরে কখন আবার হবে। */
+export interface SyncFailure {
+  id: string;
+  table_name: string;
+  row_id: string;
+  attempts: number;
+  last_error: string;
+  next_retry_at: string;
+  created_at: string;
 }
 
 export type MedicineType =

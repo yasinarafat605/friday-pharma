@@ -29,3 +29,6 @@
 *.log
 /coverage
 next-env.d.ts
+
+# TypeScript build cache
+*.tsbuildinfo
