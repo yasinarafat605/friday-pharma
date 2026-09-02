@@ -3,7 +3,7 @@
 > Read this before changing anything. It exists so a new session can pick up
 > the work without re-deriving decisions that were already made deliberately.
 >
-> Last updated after commit `8a198f8` (P1 complete). Next work item is P2.
+> Last updated after commit `3aba084` (P2 complete). Next work item is P3.
 
 ---
 
@@ -142,6 +142,63 @@ checkpoint verified row by row as a faithful pre-migration copy. The echo loop
 was proved fixed end to end in a browser — a simulated pull of ten server rows
 selects **zero** rows for push, where before it would have selected all ten.
 
+### P2 — Immutable Stock Movements
+**Status: Completed** (commit `3aba084`)
+
+**Files changed**
+
+| File | Change |
+|---|---|
+| `src/lib/stock/reconstruct.ts` | **New.** Pure replay logic, no database |
+| `src/lib/stock/backfill.ts` | **New.** Migration, depends only on the pure logic |
+| `src/lib/stock/movements.ts` | **New.** Database-facing helpers and the integrity check |
+| `src/lib/__tests__/stock-reconstruct.test.ts` | **New.** 26 tests |
+| `src/types/db.ts` | `StockMovement`, `MovementReason` |
+| `src/lib/db/local.ts` | Schema v4, append-only guard |
+| `src/lib/data.ts` | Nine movement writes, nine widened transaction scopes, stock reads switched |
+| `src/lib/sync/state.ts` | `stock_movements` added to the sync list |
+| `src/app/(app)/settings/page.tsx` | The integrity check as a user action |
+
+**The architecture.** `batches.qty_in_stock` used to be a mutable counter written
+by nine code paths, each reading a number and writing an absolute value back.
+Two devices selling offline both wrote absolutes, and last-write-wins on sync
+silently lost one sale with no error. Stock is now an append-only
+`stock_movements` log; movements never overwrite each other, so they merge.
+
+Each movement carries `batch_id`, `medicine_id`, a signed `qty_delta`, a
+`reason`, a `ref_type`/`ref_id` pointing at the record that caused it, a local
+`business_date` and a `client_txn_id`. Reasons are `opening_balance`,
+`purchase`, `sale`, `adjustment`, `return`, `write_off` and `reversal`.
+
+**The backfill** replays only records that are still active. Cancellations were
+originally applied by editing the counter rather than writing a reversing row,
+so replaying everything would double-count. Any remaining difference becomes an
+explicit `opening_balance` movement, so no displayed stock figure moved.
+
+**Two cross-checks, and why the second exists.** The first check summed the
+generated movements and compared them to the counter. During verification this
+turned out to be insufficient: the opening balance is computed as
+*counter minus replay*, so a reconstruction bug would have been absorbed by
+that balancing row and the totals would still have agreed. The check would have
+passed on broken data. The replay is therefore computed a **second time by
+deliberately different code** (`independentReplay` in `backfill.ts`) and the two
+are compared. A disagreement throws, Dexie aborts the entire upgrade, and the
+database stays at v3 with the counter in charge.
+
+`independentReplay` must stay deliberately different from `reconstructMovements`.
+Refactoring them to share code destroys the entire point of the check.
+
+**Append-only is enforced, not intended.** Hooks on `stock_movements` throw on
+update and delete. Corrections write an opposite movement.
+
+**Rollback.** `STOCK_SOURCE` in `data.ts` flips stock reads back to the counter
+in one word. The counter is still written at every site and is still correct.
+
+**Verified** against a seeded database containing a cancelled sale, a cancelled
+stock entry, a cancelled adjustment and two returns with one cancelled. All
+eight invariants in `docs/P2-INVARIANTS.md` passed. 97 tests, lint and build
+clean.
+
 ---
 
 ## Current Database State
@@ -149,16 +206,21 @@ selects **zero** rows for push, where before it would have selected all ten.
 - **IndexedDB database name:** `asshifa_local` — **deliberately unchanged**
   through the rebrand. Renaming it would orphan every record on every existing
   device.
-- **Current Dexie schema version: 3** (IndexedDB reports this as `30`).
-  Versions 1 and 2 remain declared in `local.ts` and must stay there so devices
-  on older versions can upgrade through them.
+- **Current Dexie schema version: 4** (IndexedDB reports this as `40`).
+  Versions 1, 2 and 3 remain declared in `local.ts` and must stay there so
+  devices on older versions can upgrade through them in order.
 - **Stores added in v3:** `sync_state`, `sync_failures`, `_checkpoints`.
-- **Field added in v3:** `dirty` on the 14 synced stores, indexed.
-- **Synced stores (14):** medicines, batches, stock_entries, customers,
+- **Store added in v4:** `stock_movements`, append-only.
+- **Field added in v3:** `dirty` on the synced stores, indexed.
+- **Synced stores (15):** medicines, batches, stock_entries, customers,
   customer_ledger, sales, sale_items, due_payments, expense_categories,
-  expenses, cash_sessions, stock_adjustments, sale_returns, sale_return_items.
-  `settings` and `audit_logs` are **not** stamped — this is finding P5 in the
-  audit and still needs a deliberate decision.
+  expenses, cash_sessions, stock_adjustments, sale_returns, sale_return_items,
+  stock_movements. `settings` and `audit_logs` are **not** stamped — this is
+  finding P5 in the audit and still needs a deliberate decision.
+- **`SYNCED_TABLES_V3` is frozen.** The v3 upgrade iterates it, and a device
+  still on v2 will run that upgrade. Adding a later store to it would make that
+  upgrade fail looking for a store that does not yet exist. Add new synced
+  stores to `SYNCED_TABLES` only.
 - **Migration behaviour:** additive only. No store dropped, no field removed,
   no row deleted, at any version.
 - **Existing data safety:** the database name, all `localStorage` PIN keys and
@@ -184,11 +246,12 @@ already diagnosed and fixed.
    are made by cancelling (`status: 'cancelled'`) and writing a reversal.
    Status only ever moves completed → cancelled, never back, so it merges
    safely across devices. This is already implemented throughout `data.ts`.
-5. **Stock must move to a `stock_movements` architecture.** `qty_in_stock` is
-   currently a mutable counter written by nine code paths. Two devices selling
-   offline both write an absolute value and last-write-wins silently loses one
-   sale. Stock must become an append-only movement log with the quantity as a
-   recomputed projection. This is P2 and is the highest-risk item remaining.
+5. **Stock lives in `stock_movements`, and that log is append-only.** Done in
+   P2. Never edit or delete a movement; write an opposite one. Never remove
+   `qty_in_stock` — it is the rollback path and is heading towards being a
+   maintained cache. And never refactor `independentReplay` to share code with
+   `reconstructMovements`: being written differently is the whole point of the
+   cross-check that guards the migration.
 6. **Never delete existing user data during migrations.** Every migration is
    additive, takes a checkpoint first, and verifies before committing. If a
    migration cannot reconcile, it must abort rather than half-apply.
@@ -204,52 +267,82 @@ already diagnosed and fixed.
 - ✅ RLS isolation testing against real PostgreSQL
 - ✅ P1 sync loop prevention (`dirty` flag, pure stamping rules)
 - ✅ Checkpoint backup system
+- ✅ P2 inventory migration (`3aba084`)
+- ✅ `stock_movements` implementation, local side
+- ✅ Stock integrity check shipped as a settings action
 
 **Not started**
 
-- ⬜ P2 inventory migration
-- ⬜ `stock_movements` implementation
 - ⬜ P3 membership architecture
+- ⬜ `stock_movements` on the **server** (P2 was local only — see risks below)
 - ⬜ Authentication (Supabase Auth)
 - ⬜ Sync engine (push and pull)
 
 ---
 
+## Remaining Risks After P2
+
+Recorded honestly so the next session does not rediscover them the hard way.
+
+**1. Stock reads now scan the whole movement table.** `fetchStockRows()` calls
+`computeAllBatchQty()`, which loads every movement on every inventory and
+dashboard load. Movements grow one row per sale line, far faster than batches
+did, so this is a performance regression on the hottest screens and it worsens
+forever. It is survivable today and `STOCK_SOURCE` can flip reads back, but the
+proper fix is to treat `qty_in_stock` as a **maintained cache** rather than
+either the truth or a legacy field: keep the dual write, read the cache, and use
+movements for verification and for recomputing after a sync pull. That is the
+better long-term design and should be settled before the sync engine lands.
+
+**2. The server has no `stock_movements` table.** P2 deliberately did not touch
+`supabase/*.sql`, so the local store has no server counterpart. Sync would drop
+every movement. **P3 must add it**, with `unique (pharmacy_id, client_txn_id)`
+like the other transactional tables.
+
+**3. The backfill cannot be re-run.** It skips when movements already exist, and
+the append-only hook blocks deleting them. If a reconstruction bug is found
+later, cleaning up requires a new schema version that rebuilds the log, since
+there is no supported path to clear it. Design that escape hatch before it is
+needed rather than during an incident.
+
+**4. Dual write is enforced only by tests.** Nothing at compile time stops a
+tenth stock-mutating path from being added without a movement. The browser suite
+catches it; a developer who does not run it will not be warned. Treat the I5
+test as mandatory before any change to `data.ts`.
+
+**5. `ref_type` plus `ref_id` is not unique.** A stock entry can produce a
+`purchase` movement and later `adjustment` movements from `updateStockEntry`.
+The I4 uniqueness check passed because the seeded data had no edits. This is not
+a correctness bug, but any future logic that assumes one movement per source
+record is wrong.
+
+**6. Reconstruction ordering is approximate.** Sale movements use the sale
+timestamp for both date fields, while other kinds have separate entry and
+creation times. The I6 negative-dip check is therefore a heuristic warning, not
+a guarantee.
+
+---
+
 ## Next Starting Point
 
-> **P2 planning: migrate inventory from mutable `qty_in_stock` to immutable
-> `stock_movements` without changing visible stock.**
+> **P3: replace the single-pharmacy `profiles` table with membership-based
+> access, and add the server-side tables P2 left behind.**
 
-**Read `docs/P2-INVARIANTS.md` first.** It defines the eight conditions the
-migration must prove and where each is tested. The migration does not ship
-unless I1 through I5 pass against real data, not fixtures. That document is
-binding, not advisory.
+**Read `docs/P3-PLAN.md`** for the full approach. In short:
 
-The approved approach, from the implementation plan:
+- `profiles(user_id PK)` becomes `memberships(user_id + pharmacy_id PK, role)`,
+  so one person can belong to more than one pharmacy.
+- `member_role` widens from owner and staff to owner, manager, cashier,
+  inventory and accountant.
+- A seeded `role_permissions` lookup plus a `has_permission(text)` helper
+  replaces role-name checks inside policies.
+- `auth_pharmacy_id()` resolves the **active** pharmacy and always validates it
+  against membership, so a client cannot pick its own tenant.
+- `stock_movements` is added server-side — P2 was local only.
 
-- Add an append-only `stock_movements` store. Movements are never edited or
-  deleted; a cancellation writes an opposite movement.
-- Backfill by replaying only records that are still active. Cancellations were
-  applied by editing the counter rather than writing a reversing row, so a
-  naive replay of everything produces the wrong figure:
-  - `+` stock_entries where status ≠ cancelled
-  - `−` sale_items where the sale is completed
-  - `+` stock_adjustments where status ≠ cancelled (qty is already signed)
-  - `+` sale_return_items where restock and the return is active
-- Compare the computed total against the stored `qty_in_stock`. Any difference
-  is written as an explicit `opening_balance` movement so **no displayed stock
-  figure changes**. Expect zero; handle non-zero honestly.
-- Assert that movements sum to the stored quantity for every batch before
-  committing. If any batch fails, abort and leave the counter in charge.
-- Dual write during the transition: the nine mutating functions write a
-  movement **and** keep updating `qty_in_stock`. Reads switch to the recomputed
-  total. This is what makes rollback a one-line switch.
-- The nine transactions that mutate stock gain `stock_movements` in their
-  scope. Unlike the outbox case in P1, this is correct — a stock movement is
-  business data and must commit atomically with the sale that caused it.
-- `verifyStockIntegrity()` ships as a permanent function with a button in
-  settings, not as migration-only scaffolding. It is the check that later
-  proves a multi-device sync merged correctly.
+P3 is unusually cheap right now: no application file references `profiles`, and
+the SQL has never been applied to a live Supabase project. It is editing files
+no database has yet consumed. That stops being true the moment a project exists.
 
 ---
 
@@ -259,6 +352,11 @@ The approved approach, from the implementation plan:
 - `src/lib/db/local.ts` — schema versions 1–3, hooks, seeding, export/import
 - `src/lib/db/stamp.ts` — the stamping rules (read this before touching sync)
 - `src/lib/db/checkpoint.ts` — migration snapshots
+
+**Stock**
+- `src/lib/stock/reconstruct.ts` — pure replay rules, read before changing stock
+- `src/lib/stock/backfill.ts` — the migration and its two cross-checks
+- `src/lib/stock/movements.ts` — writing, reading and `verifyStockIntegrity()`
 
 **Sync**
 - `src/lib/sync/state.ts` — cursors, failures, retry timing. No sync engine yet
@@ -279,7 +377,8 @@ The approved approach, from the implementation plan:
   anywhere, so they are still free to change (this is why P3 is cheap now)
 
 **Planning**
-- `docs/P2-INVARIANTS.md` — **binding** conditions and tests for P2
+- `docs/P3-PLAN.md` — the next task
+- `docs/P2-INVARIANTS.md` — the conditions P2 was held to, all met
 - `docs/SAAS-ROADMAP.md` — the phase plan and cost reality
 - `docs/00-PROJECT-PLAN.md` — the original design, partly historical
 
@@ -302,8 +401,12 @@ The approved approach, from the implementation plan:
   half-applying.
 - **Do not select rows to push by timestamp.** Use `dirty`. See decision 1.
 - **Do not apply server data without `dirty: 0`.** See decision 3.
-- **Do not ship P2 without the invariant tests in `docs/P2-INVARIANTS.md`.**
-  Particularly I3: the abort path must be exercised by a test that deliberately
-  breaks a batch. An untested abort path is not an abort path.
 - **Do not edit or delete a `stock_movements` row.** Write an opposite movement
-  instead. A hook will enforce this once P2 lands.
+  instead. Hooks enforce this and will throw.
+- **Do not merge `independentReplay` with `reconstructMovements`.** They exist
+  to disagree when one of them is wrong.
+- **Do not add a stock-mutating path without a movement write** in the same
+  transaction, and run the I5 browser test afterwards. Nothing at compile time
+  will catch the omission.
+- **Do not add a new store to `SYNCED_TABLES_V3`.** It is frozen because devices
+  still on v2 replay that upgrade. Use `SYNCED_TABLES`.
