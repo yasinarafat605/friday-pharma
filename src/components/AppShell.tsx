@@ -8,6 +8,7 @@ import { getSettings } from '@/lib/db/local';
 import { backupStatus, type BackupStatus } from '@/lib/business-rules';
 import { toBanglaDigits } from '@/lib/money';
 import { L } from '@/lib/i18n/labels';
+import BrandMark from '@/components/BrandMark';
 
 const NAV = [
   { href: '/dashboard', label: L.nav.dashboard, icon: '🏠' },
@@ -119,6 +120,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       >
         <button className="flex items-center gap-2 text-brand-dark" onClick={() => setMenuOpen((v) => !v)} aria-label="মেনু">
           <span className="text-2xl">☰</span>
+          <BrandMark className="h-7 w-auto shrink-0" />
           <span className="text-lg font-bold">{shopName}</span>
         </button>
         <div className="flex items-center gap-3">
@@ -189,7 +191,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       {locked && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-brand-dark/95 p-6">
           <form onSubmit={tryUnlock} className="w-full max-w-xs text-center text-white">
-            <div className="mb-3 text-5xl">🔒</div>
+            <BrandMark className="mx-auto mb-4 h-14 w-auto" mono="#FFFFFF" />
+            <div className="mb-3 text-4xl">🔒</div>
             <p className="mb-4 text-xl font-bold">স্ক্রিন লক</p>
             <input inputMode="numeric" maxLength={PIN_LENGTH} autoFocus
               className="input mb-3 text-center text-2xl tracking-[0.5em] text-ink"

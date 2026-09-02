@@ -9,6 +9,7 @@ import {
 import { ensureSeeded } from '@/lib/db/local';
 import { toBanglaDigits } from '@/lib/money';
 import { L } from '@/lib/i18n/labels';
+import BrandMark from '@/components/BrandMark';
 
 type Mode = 'loading' | 'setup' | 'enter' | 'reset';
 
@@ -83,9 +84,7 @@ export default function LoginPage() {
     <main className="flex min-h-screen items-center justify-center bg-brand-light p-4">
       <div className="card w-full max-w-md">
         <div className="mb-6 text-center">
-          <div className="mx-auto mb-3 flex h-16 w-16 items-center justify-center rounded-full bg-brand text-2xl font-bold text-white">
-            FP
-          </div>
+          <BrandMark className="mx-auto mb-3 h-16 w-auto" />
           <h1 className="text-2xl font-bold text-brand-dark">{L.appName}</h1>
           <p className="text-sm text-gray-500">{L.appNameBn}</p>
           <p className="text-gray-500">{L.tagline}</p>

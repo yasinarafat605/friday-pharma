@@ -1,0 +1,13 @@
+/* Friday Pharma brand colours */
+:root {
+  --fp-ink: #0A1D37;
+  --fp-deep-blue: #1E3A8A;
+  --fp-blue: #2563EB;
+  --fp-green: #10B881;
+  --fp-mint: #34D399;
+  --fp-line: #E5E7EB;
+  --fp-white: #FFFFFF;
+
+  --fp-gradient-brand: linear-gradient(135deg, #2563EB 0%, #10B881 100%);
+  --fp-gradient-tile: linear-gradient(135deg, #14315C 0%, #0A1D37 55%, #071427 100%);
+}
