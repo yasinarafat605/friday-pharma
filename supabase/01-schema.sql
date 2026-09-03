@@ -14,7 +14,10 @@ create extension if not exists "pgcrypto";
 -- ============================================================
 
 create type plan_tier as enum ('trial', 'free', 'pro');
-create type member_role as enum ('owner', 'staff');
+-- পাঁচটি ভূমিকা। কে কী পারবে তা এখানে নয়, role_permissions টেবিলে —
+-- নতুন ভূমিকা যোগ করা মানে কয়েকটি সারি, policy আবার লেখা নয়।
+create type member_role as enum
+  ('owner', 'manager', 'cashier', 'inventory', 'accountant');
 
 create table pharmacies (
   id            uuid primary key,               -- ডিভাইসে তৈরি হওয়া id-ই ব্যবহার হয়
@@ -25,26 +28,44 @@ create table pharmacies (
   plan          plan_tier not null default 'trial',
   trial_ends_at timestamptz not null default (now() + interval '30 days'),
   is_active     boolean not null default true,  -- বকেয়া বিল বা বন্ধ অ্যাকাউন্ট
+  -- কে এটি তৈরি করেছে। প্রথম মালিকানা দাবির একমাত্র ভিত্তি এটাই —
+  -- এটি ছাড়া যে কেউ যেকোনো pharmacy_id দিয়ে নিজেকে মালিক বানাতে পারত।
+  created_by    uuid references auth.users(id) on delete set null,
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now()
 );
 
-create table profiles (
-  user_id     uuid primary key references auth.users(id) on delete cascade,
+-- এক ব্যক্তি একাধিক ফার্মেসিতে থাকতে পারেন — তাই জোড়াটিই primary key।
+-- আগে user_id একাই key ছিল, অর্থাৎ একজন চিরকাল একটি দোকানেই আটকে থাকতেন।
+create table memberships (
+  user_id     uuid not null references auth.users(id) on delete cascade,
   pharmacy_id uuid not null references pharmacies(id) on delete cascade,
-  role        member_role not null default 'staff',
+  role        member_role not null default 'cashier',
+  -- একাধিক দোকানে থাকলে কোনটি আগে খুলবে
+  is_default  boolean not null default false,
   full_name   text,
   phone       text,
-  created_at  timestamptz not null default now(),
-  updated_at  timestamptz not null default now()
+  joined_at   timestamptz not null default now(),
+  updated_at  timestamptz not null default now(),
+  primary key (user_id, pharmacy_id)
 );
-create index on profiles (pharmacy_id);
+create index on memberships (pharmacy_id);
+-- একজনের একটিই ডিফল্ট
+create unique index memberships_one_default on memberships (user_id) where is_default;
+
+-- ভূমিকা → অনুমতি। Policy আর ভূমিকার নাম দেখে না, এই তালিকা দেখে।
+-- সারিগুলো 03-permissions.sql-এ।
+create table role_permissions (
+  role       member_role not null,
+  permission text not null,
+  primary key (role, permission)
+);
 
 -- কর্মচারী যোগ করার আমন্ত্রণ কোড
 create table invites (
   code        text primary key,
   pharmacy_id uuid not null references pharmacies(id) on delete cascade,
-  role        member_role not null default 'staff',
+  role        member_role not null default 'cashier',
   expires_at  timestamptz not null default (now() + interval '7 days'),
   used_by     uuid references auth.users(id),
   used_at     timestamptz,
@@ -55,18 +76,124 @@ create index on invites (pharmacy_id);
 -- ============================================================
 -- কে কোন ফার্মেসির — RLS-এর ভিত্তি
 -- ============================================================
+--
+-- নিচের সব ফাংশন SECURITY DEFINER। তাই এগুলো memberships পড়ার সময়
+-- memberships-এর নিজের RLS-এ আটকায় না, আর policy → policy চক্রও হয় না।
 
--- SECURITY DEFINER, তাই profiles-এর নিজের RLS-এ আটকে গিয়ে চক্র তৈরি হয় না।
+-- ক্লায়েন্ট কোন ফার্মেসিতে কাজ করতে চাইছে বলে *দাবি* করছে।
+-- এটি নিছক দাবি — কখনো সরাসরি ব্যবহার করা হয় না, সবসময় যাচাই হয়।
+-- Supabase-এ এটি request header বা JWT claim থেকে আসবে; পরীক্ষায় GUC থেকে।
+create or replace function has_active_pharmacy_claim()
+returns boolean
+language sql
+stable
+as $$
+  select coalesce(nullif(current_setting('app.active_pharmacy', true), ''), '') <> ''
+$$;
+
+-- দাবিটি uuid হিসেবে পড়া গেল কিনা। না গেলে null, কিন্তু "দাবি নেই" নয় —
+-- পার্থক্যটা জরুরি: আজেবাজে দাবি দিয়ে ডিফল্ট দোকানে গড়িয়ে যাওয়া চলবে না।
+create or replace function active_pharmacy_claim()
+returns uuid
+language plpgsql
+stable
+as $$
+begin
+  return nullif(current_setting('app.active_pharmacy', true), '')::uuid;
+exception when others then
+  return null;
+end;
+$$;
+
+/*
+ * এই মুহূর্তে ব্যবহারকারী কোন ফার্মেসিতে আছেন।
+ *
+ * ১. দাবি থাকলে — সদস্যপদ থাকলে তবেই সেটি ফেরে।
+ * ২. দাবি থাকলে কিন্তু সদস্যপদ না থাকলে **null**, অন্য কিছুতে গড়িয়ে যায় না।
+ *    গড়িয়ে গেলে ভুল দাবি নিঃশব্দে অন্য দোকানে কাজ করত।
+ * ৩. দাবি না থাকলে — ডিফল্ট, নইলে একমাত্র সদস্যপদ।
+ * ৪. কিছুই না মিললে null, আর null মানে RLS-এ সর্বত্র শূন্য সারি।
+ */
 create or replace function auth_pharmacy_id()
 returns uuid
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  claim uuid := active_pharmacy_claim();
+  found_id uuid;
+begin
+  if auth.uid() is null then
+    return null;
+  end if;
+
+  -- দাবি করা হয়েছে (তা পড়া যাক বা না যাক) — তাহলে সেটিই একমাত্র পথ।
+  if has_active_pharmacy_claim() then
+    if claim is null then
+      return null;                        -- অপাঠ্য দাবি = অবৈধ দাবি
+    end if;
+    select m.pharmacy_id into found_id
+      from memberships m
+     where m.user_id = auth.uid() and m.pharmacy_id = claim;
+    return found_id;                      -- সদস্য না হলে null। ইচ্ছাকৃত।
+  end if;
+
+  select m.pharmacy_id into found_id
+    from memberships m
+   where m.user_id = auth.uid() and m.is_default;
+  if found_id is not null then
+    return found_id;
+  end if;
+
+  select m.pharmacy_id into found_id
+    from memberships m
+   where m.user_id = auth.uid()
+   limit 2;                               -- একটির বেশি থাকলে বেছে নেওয়া যাবে না
+  if (select count(*) from memberships m where m.user_id = auth.uid()) = 1 then
+    return found_id;
+  end if;
+
+  return null;
+end;
+$$;
+
+-- চালু ফার্মেসিতে ব্যবহারকারীর ভূমিকা
+create or replace function auth_role()
+returns member_role
 language sql
 stable
 security definer
 set search_path = public
 as $$
-  select pharmacy_id from profiles where user_id = auth.uid()
+  select m.role from memberships m
+   where m.user_id = auth.uid() and m.pharmacy_id = auth_pharmacy_id()
 $$;
 
+/*
+ * অনুমতি আছে কিনা — ভূমিকার নাম নয়, তালিকা দেখে।
+ * Policy-তে 'sales.cancel' লেখা থাকে; কোন ভূমিকা সেটি পায় তা
+ * role_permissions-এর সারি বদলেই পাল্টানো যায়।
+ */
+create or replace function has_permission(perm text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+      from memberships m
+      join role_permissions rp on rp.role = m.role
+     where m.user_id = auth.uid()
+       and m.pharmacy_id = auth_pharmacy_id()
+       and rp.permission = perm
+  )
+$$;
+
+-- বিলিং ও মালিকানার জন্য — বাকি সব জায়গায় has_permission ব্যবহার করুন
 create or replace function is_owner()
 returns boolean
 language sql
@@ -74,7 +201,66 @@ stable
 security definer
 set search_path = public
 as $$
-  select coalesce((select role = 'owner' from profiles where user_id = auth.uid()), false)
+  select coalesce(auth_role() = 'owner', false)
+$$;
+
+-- নির্দিষ্ট ফার্মেসিতে ব্যবহারকারীর ভূমিকা। নিজের ভূমিকা নিজে বদলানো
+-- আটকাতে policy-তে এটি লাগে (একই টেবিলে subquery দিলে RLS-এ চক্র হতো)।
+create or replace function auth_role_in(p uuid)
+returns member_role
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select m.role from memberships m
+   where m.user_id = auth.uid() and m.pharmacy_id = p
+$$;
+
+-- নির্দিষ্ট ফার্মেসিতে সদস্য কিনা (চালু ফার্মেসি নয়, যেকোনোটি)
+create or replace function is_member_of(p uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from memberships m
+     where m.user_id = auth.uid() and m.pharmacy_id = p
+  )
+$$;
+
+-- ফার্মেসিতে আদৌ কোনো সদস্য আছে কিনা। দাবিহীন (unclaimed) ফার্মেসি চেনার জন্য।
+create or replace function pharmacy_has_members(p uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (select 1 from memberships m where m.pharmacy_id = p)
+$$;
+
+/*
+ * প্রথম মালিকানা দাবি করা যাবে কিনা — F1 এর মূল প্রতিরোধ।
+ *
+ * দুটি শর্ত একসাথে: ফার্মেসিটি এই ব্যবহারকারীই তৈরি করেছেন, এবং সেখানে
+ * এখনো কেউ নেই। তাই অন্যের pharmacy_id জানা থাকলেও নিজেকে মালিক বসানো যায় না।
+ */
+create or replace function can_bootstrap_owner(p uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select auth.uid() is not null
+     and exists (
+       select 1 from pharmacies ph
+        where ph.id = p and ph.created_by = auth.uid()
+     )
+     and not exists (select 1 from memberships m where m.pharmacy_id = p)
 $$;
 
 -- ফার্মেসির সাবস্ক্রিপশন চালু আছে কিনা (পেইড প্ল্যানের জন্য প্রস্তুত)
@@ -89,6 +275,63 @@ as $$
     select p.is_active and (p.plan <> 'trial' or p.trial_ends_at > now())
     from pharmacies p where p.id = auth_pharmacy_id()
   ), false)
+$$;
+
+-- ============================================================
+-- আমন্ত্রণ কোড — টেবিল পড়ে নয়, ফাংশন দিয়ে
+-- ============================================================
+--
+-- invites টেবিলের select policy কেবল নিজের ফার্মেসির সারি দেখায় (F5)।
+-- যিনি এখনো সদস্য নন তিনি কোড যাচাই করবেন নিচের ফাংশন দিয়ে — সেখানে
+-- সম্পূর্ণ কোডটি জানা বাধ্যতামূলক, তাই তালিকা করে দেখার (enumerate) পথ নেই।
+-- কোড অবশ্যই যথেষ্ট এলোমেলো হতে হবে; ছোট বা অনুমানযোগ্য কোড এই সুরক্ষা নষ্ট করে।
+
+create or replace function invite_preview(p_code text)
+returns table (pharmacy_id uuid, pharmacy_name text, role member_role)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select i.pharmacy_id, ph.name, i.role
+    from invites i
+    join pharmacies ph on ph.id = i.pharmacy_id
+   where i.code = p_code
+     and i.used_by is null
+     and i.expires_at > now()
+$$;
+
+-- কোড ব্যবহার করে যোগ দেওয়া। ভূমিকা আমন্ত্রণ থেকেই আসে, ব্যবহারকারীর
+-- পছন্দ থেকে নয় — তাই কেউ নিজেকে মালিক বলে ঢুকতে পারে না।
+create or replace function redeem_invite(p_code text)
+returns uuid
+language plpgsql
+volatile
+security definer
+set search_path = public
+as $$
+declare
+  inv invites%rowtype;
+begin
+  if auth.uid() is null then
+    raise exception 'লগইন ছাড়া যোগ দেওয়া যাবে না';
+  end if;
+
+  select * into inv from invites
+   where code = p_code and used_by is null and expires_at > now()
+   for update;
+
+  if not found then
+    raise exception 'আমন্ত্রণ কোডটি ভুল বা মেয়াদ শেষ';
+  end if;
+
+  insert into memberships (user_id, pharmacy_id, role)
+  values (auth.uid(), inv.pharmacy_id, inv.role)
+  on conflict (user_id, pharmacy_id) do nothing;
+
+  update invites set used_by = auth.uid(), used_at = now() where code = p_code;
+  return inv.pharmacy_id;
+end;
 $$;
 
 -- ============================================================

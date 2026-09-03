@@ -1,9 +1,11 @@
 # P3 — Membership-Based Access
 
-> Plan only. No code written. Read `docs/PHASE-HANDOFF.md` first.
+> **Done.** Kept as the record of what was planned; what was actually built is
+> in `docs/PHASE-HANDOFF.md` under "P3 — membership architecture". Two things
+> came out differently: `stock_movements` was already added in P2b rather than
+> here, and the audit's findings F1 and F5 were folded in as core requirements.
 >
-> P3 is SQL-only. **No application file changes.** Verified: nothing under
-> `src/` references `profiles`, `auth_pharmacy_id` or Supabase.
+> P3 was SQL-only as planned. **No application file changed.**
 
 ---
 

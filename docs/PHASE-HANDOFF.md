@@ -3,7 +3,7 @@
 > Read this before changing anything. It exists so a new session can pick up
 > the work without re-deriving decisions that were already made deliberately.
 >
-> Last updated after commit `3aba084` (P2 complete). Next work item is P3.
+> Last updated after P3. Next work item is authentication (Supabase Auth).
 
 ---
 
@@ -272,10 +272,12 @@ already diagnosed and fixed.
 - ✅ Stock integrity check shipped as a settings action
 - ✅ P2b stock cache split: server `stock_movements` table plus the read-path
   fix (`fetchStockRows` reads the cache, movements verify and rebuild it)
+- ✅ P3 membership architecture: `memberships`, five roles, `role_permissions`
+  plus `has_permission()`, a validating active-pharmacy resolver, and the
+  isolation suite checked into the repo
 
 **Not started**
 
-- ⬜ P3 membership architecture
 - ⬜ Authentication (Supabase Auth)
 - ⬜ Sync engine (push and pull)
 
@@ -293,6 +295,13 @@ below for the design and for why this must not be changed back.
 `supabase/01-schema.sql` now defines it and `supabase/02-policies.sql` gives it
 pharmacy-scoped RLS with **select and insert only**. The SQL has still never
 been applied to a live project.
+
+**F1. Any authenticated user could claim any pharmacy as owner. RESOLVED in P3.**
+The old `profile_insert` policy checked `user_id = auth.uid()` and never checked
+`pharmacy_id`. See "P3 — membership architecture" below.
+
+**F5. Invite codes were readable across every tenant. RESOLVED in P3.**
+The old `invite_lookup` policy had no tenant predicate at all.
 
 **3. The backfill cannot be re-run.** It skips when movements already exist, and
 the append-only hook blocks deleting them. If a reconstruction bug is found
@@ -379,29 +388,112 @@ way rather than relaxing the hook.
 
 ---
 
+## P3 — Membership architecture
+
+**Commit `P3_COMMIT`.** SQL only. Nothing under `src/` changed, and the
+`stock_movements` table and its append-only trigger are byte-identical to P2b.
+
+### What replaced what
+
+`profiles(user_id PK)` is gone. `memberships(user_id, pharmacy_id)` keys on the
+**pair**, so one person can belong to several pharmacies — an owner with two
+branches, an accountant serving three shops. `is_default` marks which one opens
+first.
+
+`member_role` widened from owner and staff to **owner, manager, cashier,
+inventory, accountant**. Policies no longer test role names anywhere. They call
+`has_permission('sales.cancel')`, and `role_permissions` (seeded in
+`03-permissions.sql`) decides who holds what. Changing who may cancel a sale is
+now an `insert` and a `delete`, not a policy rewrite.
+
+### The two security fixes, and why they were mandatory here
+
+**F1 — claiming a pharmacy.** The old insert policy validated *who you are* and
+never *which tenant you were joining*. The only thing stopping a stranger from
+inserting themselves as owner of a pharmacy id they had seen was the primary key
+on `user_id` — and this phase removes that key. Carrying the policy over would
+have turned an accident into an open door.
+
+`pharmacies` gained `created_by`. There are now exactly three ways a membership
+can come into existence, and each is checked:
+
+1. **Bootstrap** — you may make yourself owner of a pharmacy only if you created
+   it *and* nobody has joined it yet (`can_bootstrap_owner()`).
+2. **Invitation** — `redeem_invite(code)`, `security definer`. The role comes
+   from the invite, never from the joiner, so nobody walks in as an owner.
+3. **Administration** — a member with `members.manage` adds someone to the
+   pharmacy they are currently working in. Only an owner may mint another owner.
+
+**F5 — invite codes.** The old policy was `using (used_by is null and
+expires_at > now())` with no tenant predicate, so any authenticated user could
+list every live code in the system and join any shop. Now the table is readable
+only within your own pharmacy and only with `members.manage`. Someone who is not
+yet a member validates a code through `invite_preview()`, which requires the
+complete code and returns one row — no listing, no enumeration. **Codes must
+therefore be long and random;** a short or guessable code defeats this.
+
+### The active-pharmacy resolver
+
+`auth_pharmacy_id()` is the piece that had to be right. Given a claim from the
+client it returns that pharmacy **only** when a membership row exists. A claim
+that is present but does not parse, or parses but does not match a membership,
+returns null rather than falling through to the user's default — falling through
+would let a bad claim quietly succeed as something else. Null means zero rows
+everywhere under RLS.
+
+### One PostgreSQL trap this uncovered
+
+The first run of the new suite caught a cashier promoting himself to manager.
+The cause is worth remembering: **when several permissive policies exist on a
+table, PostgreSQL ORs their `using` clauses and, separately, ORs their
+`with check` clauses.** The cashier failed the admin policy's `using`, but his
+new row satisfied that policy's weaker `with check`, and that was enough.
+
+Every `with check` in `02-policies.sql` is therefore self-sufficient: it
+re-asserts both the tenant and the permission rather than relying on the `using`
+beside it. Keep it that way when adding policies.
+
+### The isolation suite is now in the repo
+
+```
+bash supabase/run-isolation-test.sh
+```
+
+It builds a scratch database, applies schema, policies and permissions, runs
+**85 cases**, prints a pass/fail table and raises an exception if anything
+failed, then drops the database. It touches no live project. Run it on every
+policy change — that is the whole point of checking it in.
+
+Coverage: the seven original P1 cases unchanged, the F1 attack exactly as the
+audit proved it live, F5 enumeration from three angles, the resolver fed a
+pharmacy the user does not belong to, multi-membership switching, all five role
+boundaries, self-escalation, membership removal, and `stock_movements` isolation
+plus its append-only rule.
+
+### Deliberately not done
+
+Authentication, the sync engine, the pharmacy switcher and any permission admin
+screen. P3 prepares the database and stops.
+
+---
+
 ## Next Starting Point
 
-> **P3: replace the single-pharmacy `profiles` table with membership-based
-> access.**
->
-> The server-side `stock_movements` table that P3 was going to carry is
-> already done, in P2b. P3 is now purely the membership and permission work.
+> **Authentication: Supabase Auth on top of the membership model P3 built.**
 
-**Read `docs/P3-PLAN.md`** for the full approach. In short:
+The database side is ready. What authentication has to add:
 
-- `profiles(user_id PK)` becomes `memberships(user_id + pharmacy_id PK, role)`,
-  so one person can belong to more than one pharmacy.
-- `member_role` widens from owner and staff to owner, manager, cashier,
-  inventory and accountant.
-- A seeded `role_permissions` lookup plus a `has_permission(text)` helper
-  replaces role-name checks inside policies.
-- `auth_pharmacy_id()` resolves the **active** pharmacy and always validates it
-  against membership, so a client cannot pick its own tenant.
-- `stock_movements` is added server-side — P2 was local only.
+- Sign-up creates the pharmacy and then the bootstrap owner membership, in that
+  order — the second step depends on `created_by` from the first.
+- Sign-in must choose an active pharmacy for a user with several memberships and
+  send it as the claim `auth_pharmacy_id()` reads. On Supabase that is a request
+  header or a JWT claim; the resolver already validates whatever arrives.
+- Joining a shop calls `redeem_invite(code)`, never a direct insert.
+- The 8-digit PIN stays as a quick screen lock, not the account key.
 
-P3 is unusually cheap right now: no application file references `profiles`, and
-the SQL has never been applied to a live Supabase project. It is editing files
-no database has yet consumed. That stops being true the moment a project exists.
+Still true, and still worth hurrying: **the SQL has never been applied to a live
+Supabase project.** Every policy remains free to change. That ends the moment a
+real project exists.
 
 ---
 
@@ -434,8 +526,15 @@ no database has yet consumed. That stops being true the moment a project exists.
 - `src/types/db.ts` — `SyncFields` and every entity type
 
 **Server**
-- `supabase/01-schema.sql`, `supabase/02-policies.sql` — not yet applied
-  anywhere, so they are still free to change (this is why P3 is cheap now)
+- `supabase/01-schema.sql` — tables plus the helper functions. Read
+  `auth_pharmacy_id()` before changing anything about tenancy
+- `supabase/02-policies.sql` — every policy, with the `with check` rule above
+- `supabase/03-permissions.sql` — who may do what. Change roles here, not in policies
+- `supabase/test-isolation.sql` + `run-isolation-test.sh` — 85 cases; run on every
+  policy change
+- `supabase/00-test-harness.sql` — the local `auth` stub. **Test only.** Supabase
+  provides the real one; running this against a live project would be a mistake
+- None of it has been applied anywhere yet
 
 **Planning**
 - `docs/P3-PLAN.md` — the next task
@@ -475,5 +574,15 @@ no database has yet consumed. That stops being true the moment a project exists.
   will catch the omission.
 - **Do not give the server `stock_movements` table an update or delete
   policy**, and do not drop its append-only trigger. Write a reversing movement.
+- **Do not write a `with check` that leans on its own `using` clause.**
+  PostgreSQL ORs the `with check` of every permissive policy on the table, so a
+  weak one is a hole regardless of how strict its neighbour is. This was a real
+  bug, caught by the isolation suite.
+- **Do not add a membership insert path that does not verify the pharmacy.**
+  Checking `user_id = auth.uid()` alone is finding F1 all over again.
+- **Do not give `invites` a select policy without a tenant predicate.** That was
+  finding F5. Code validation for non-members goes through `invite_preview()`.
+- **Do not change a policy without re-running `supabase/run-isolation-test.sh`.**
+  It is checked in precisely so this is one command.
 - **Do not add a new store to `SYNCED_TABLES_V3`.** It is frozen because devices
   still on v2 replay that upgrade. Use `SYNCED_TABLES`.
