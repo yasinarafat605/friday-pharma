@@ -32,3 +32,6 @@ next-env.d.ts
 
 # TypeScript build cache
 *.tsbuildinfo
+
+# Cowork যেখানে ফাইল রেখে যায় — রিপোর্টের কপি docs/audit/-এ রাখা আছে
+/Claude outputs/

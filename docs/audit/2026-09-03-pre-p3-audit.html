@@ -1,0 +1,772 @@
+<title>Friday Pharma Pre-P3 Audit</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Sans+3:ital,wght@0,400;0,600;1,400&display=swap">
+
+<style>
+  :root {
+    --ground:      #F7F8FA;
+    --surface:     #FFFFFF;
+    --sunken:      #EEF1F5;
+    --ink:         #10151F;
+    --ink-2:       #37414F;
+    --ink-3:       #6B7684;
+    --rule:        #DDE2E9;
+    --rule-strong: #C3CAD4;
+    --accent:      #1F4B99;
+    --accent-soft: #E7EDF7;
+    --crit:        #A61B2B;
+    --crit-soft:   #FBE9EB;
+    --warn:        #8A5A08;
+    --warn-soft:   #FBF0DC;
+    --pass:        #16624A;
+    --pass-soft:   #E2F1EB;
+
+    --f-display: 'Archivo', 'Helvetica Neue', Arial, sans-serif;
+    --f-body:    'Source Sans 3', 'Segoe UI', system-ui, sans-serif;
+    --f-mono:    'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+
+    --measure: 68ch;
+    --pad: clamp(20px, 4vw, 56px);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:      #0C1017;
+      --surface:     #141A24;
+      --sunken:      #1B222E;
+      --ink:         #E9EDF3;
+      --ink-2:       #B6C0CE;
+      --ink-3:       #808C9C;
+      --rule:        #273041;
+      --rule-strong: #3A4557;
+      --accent:      #7FA6E8;
+      --accent-soft: #1A2740;
+      --crit:        #F08A94;
+      --crit-soft:   #331A1F;
+      --warn:        #E0B267;
+      --warn-soft:   #2E2513;
+      --pass:        #6FC7A5;
+      --pass-soft:   #102A22;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground:      #0C1017;
+    --surface:     #141A24;
+    --sunken:      #1B222E;
+    --ink:         #E9EDF3;
+    --ink-2:       #B6C0CE;
+    --ink-3:       #808C9C;
+    --rule:        #273041;
+    --rule-strong: #3A4557;
+    --accent:      #7FA6E8;
+    --accent-soft: #1A2740;
+    --crit:        #F08A94;
+    --crit-soft:   #331A1F;
+    --warn:        #E0B267;
+    --warn-soft:   #2E2513;
+    --pass:        #6FC7A5;
+    --pass-soft:   #102A22;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--f-body);
+    font-size: 17px;
+    line-height: 1.62;
+    margin: 0;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 var(--pad) 96px; }
+  .col  { max-width: var(--measure); }
+
+  /* ---------- masthead ---------- */
+  header.masthead {
+    border-bottom: 2px solid var(--ink);
+    padding: clamp(40px, 7vw, 76px) 0 26px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 24px;
+  }
+  .eyebrow {
+    font-family: var(--f-mono);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin: 0 0 12px;
+  }
+  h1 {
+    font-family: var(--f-display);
+    font-weight: 700;
+    font-size: clamp(34px, 5.4vw, 54px);
+    line-height: 1.04;
+    letter-spacing: -0.022em;
+    margin: 0;
+    text-wrap: balance;
+  }
+  .masthead-meta {
+    font-family: var(--f-mono);
+    font-size: 12.5px;
+    line-height: 1.9;
+    color: var(--ink-3);
+    text-align: right;
+  }
+  .masthead-meta b { color: var(--ink-2); font-weight: 500; }
+
+  /* ---------- verdict ---------- */
+  .verdict {
+    margin: 34px 0 0;
+    border-left: 5px solid var(--pass);
+    background: var(--surface);
+    padding: 26px 28px;
+  }
+  .verdict h2 {
+    font-family: var(--f-display);
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin: 0 0 10px;
+  }
+  .verdict p { margin: 0 0 12px; max-width: var(--measure); color: var(--ink-2); }
+  .verdict p:last-child { margin-bottom: 0; }
+  .verdict strong { color: var(--ink); font-weight: 600; }
+
+  .tally {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(158px, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    margin: 26px 0 0;
+  }
+  .tally div { background: var(--surface); padding: 16px 18px; }
+  .tally .n {
+    font-family: var(--f-display);
+    font-size: 30px;
+    font-weight: 700;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    display: block;
+  }
+  .tally .k {
+    font-family: var(--f-mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    display: block;
+    margin-top: 8px;
+  }
+  .tally .crit .n { color: var(--crit); }
+  .tally .warn .n { color: var(--warn); }
+  .tally .pass .n { color: var(--pass); }
+
+  /* ---------- sections ---------- */
+  section { margin-top: 62px; scroll-margin-top: 20px; }
+  h2.sec {
+    font-family: var(--f-display);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin: 0 0 4px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--rule-strong);
+  }
+  h3.sec-title {
+    font-family: var(--f-display);
+    font-size: clamp(23px, 3vw, 30px);
+    font-weight: 600;
+    letter-spacing: -0.016em;
+    margin: 18px 0 14px;
+    text-wrap: balance;
+  }
+  section > p { max-width: var(--measure); color: var(--ink-2); }
+
+  /* ---------- findings ---------- */
+  .finding {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 4px solid var(--rule-strong);
+    padding: 22px 24px;
+    margin-top: 18px;
+  }
+  .finding.crit { border-left-color: var(--crit); }
+  .finding.warn { border-left-color: var(--warn); }
+  .finding.low  { border-left-color: var(--ink-3); }
+
+  .finding-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 10px 14px;
+    margin-bottom: 12px;
+  }
+  .fid {
+    font-family: var(--f-mono);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink-3);
+    letter-spacing: 0.04em;
+  }
+  .finding h4 {
+    font-family: var(--f-display);
+    font-size: 19px;
+    font-weight: 600;
+    letter-spacing: -0.012em;
+    margin: 0;
+    flex: 1 1 320px;
+    text-wrap: balance;
+  }
+  .pill {
+    font-family: var(--f-mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    white-space: nowrap;
+  }
+  .pill.crit { background: var(--crit-soft); color: var(--crit); }
+  .pill.warn { background: var(--warn-soft); color: var(--warn); }
+  .pill.low  { background: var(--sunken);    color: var(--ink-3); }
+  .pill.pass { background: var(--pass-soft); color: var(--pass); }
+  .pill.p3   { background: var(--accent-soft); color: var(--accent); }
+
+  .finding p { margin: 0 0 12px; max-width: var(--measure); color: var(--ink-2); }
+  .finding p:last-child { margin-bottom: 0; }
+  .finding p.verdict-line { color: var(--ink); }
+
+  code, .mono {
+    font-family: var(--f-mono);
+    font-size: 0.875em;
+    background: var(--sunken);
+    padding: 1px 5px;
+    border-radius: 2px;
+  }
+
+  pre {
+    font-family: var(--f-mono);
+    font-size: 12.5px;
+    line-height: 1.72;
+    background: var(--sunken);
+    border-left: 2px solid var(--rule-strong);
+    padding: 14px 16px;
+    margin: 14px 0;
+    overflow-x: auto;
+    color: var(--ink-2);
+  }
+  pre b { color: var(--ink); font-weight: 600; }
+  pre .ok { color: var(--pass); }
+  pre .no { color: var(--crit); }
+
+  .evidence-label {
+    font-family: var(--f-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin: 16px 0 -6px;
+  }
+
+  /* ---------- tables ---------- */
+  .scroller { overflow-x: auto; margin: 20px 0 0; border: 1px solid var(--rule); }
+  table { border-collapse: collapse; width: 100%; background: var(--surface); }
+  th, td {
+    text-align: left;
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--rule);
+    font-size: 14.5px;
+    vertical-align: top;
+  }
+  thead th {
+    font-family: var(--f-mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    background: var(--sunken);
+    border-bottom: 1px solid var(--rule-strong);
+    white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  td.m { font-family: var(--f-mono); font-size: 12.5px; white-space: nowrap; }
+  td.num { font-variant-numeric: tabular-nums; text-align: right; }
+  .yes { color: var(--pass); font-weight: 600; }
+  .no  { color: var(--crit); font-weight: 600; }
+
+  table.matrix td.m { text-align: center; padding-left: 6px; padding-right: 6px; }
+  table.matrix th:not(:first-child) { text-align: center; }
+  table.matrix td:first-child { font-family: var(--f-mono); font-size: 12.5px; }
+
+  ul.tight { max-width: var(--measure); padding-left: 20px; color: var(--ink-2); margin: 12px 0; }
+  ul.tight li { margin-bottom: 7px; }
+
+  .footnote {
+    margin-top: 64px;
+    padding-top: 18px;
+    border-top: 1px solid var(--rule);
+    font-family: var(--f-mono);
+    font-size: 12px;
+    line-height: 1.85;
+    color: var(--ink-3);
+    max-width: 82ch;
+  }
+
+  a { color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <div>
+      <p class="eyebrow">Full-system audit · read-only · no files changed</p>
+      <h1>Friday Pharma<br>Pre-P3 Audit</h1>
+    </div>
+    <div class="masthead-meta">
+      HEAD <b>361d3d1</b><br>
+      tree <b>3cfae08</b> · working tree clean<br>
+      scope <b>P1 · P2 · branding · P2b</b><br>
+      3 September 2026
+    </div>
+  </header>
+
+  <div class="verdict">
+    <h2>Verdict: safe to start P3 — with one condition</h2>
+    <p>Nothing blocks P3 from beginning. The build is green, all 104 tests pass, and cross-tenant isolation was re-verified today against a live PostgreSQL 16 instance: all 17 business tables refuse cross-tenant read, insert, update, tenant-move and delete, and the <code>stock_movements</code> append-only trigger rejects even owner-level writes.</p>
+    <p>The condition is that <strong>F1 and F5 are P3's own work, not follow-ups.</strong> Both are live weaknesses in the membership layer P3 is about to rewrite, and one of them (F1) is currently held shut only by a primary key that the P3 plan explicitly removes. Ship P3 without addressing them and the phase makes the system less safe, not more.</p>
+    <p>Separately, <strong>F2 and F3 must be settled before the sync engine</strong> and before any pharmacy runs on more than one device. Neither affects P3.</p>
+    <p class="verdict-line">Nothing found here is exploitable today: the SQL has never been applied to a live Supabase project, and there is no authentication yet.</p>
+  </div>
+
+  <div class="tally">
+    <div class="crit"><span class="n">1</span><span class="k">Critical</span></div>
+    <div class="warn"><span class="n">4</span><span class="k">High / medium</span></div>
+    <div class="low"><span class="n">3</span><span class="k">Low</span></div>
+    <div><span class="n">11</span><span class="k">Doc mismatches</span></div>
+    <div class="pass"><span class="n">0</span><span class="k">Blocking P3</span></div>
+  </div>
+
+  <!-- ============ REGISTER ============ -->
+  <section id="register">
+    <h2 class="sec">Section 1</h2>
+    <h3 class="sec-title">Consolidated risk register</h3>
+    <p>Every open risk across all documents, plus what this pass found. <span class="mono">R1</span>–<span class="mono">R6</span> map to the six recorded in <code>docs/PHASE-HANDOFF.md</code>; <span class="mono">F</span> items are new here.</p>
+
+    <div class="scroller">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th><th>Item</th><th>Severity</th><th>Blocks P3</th><th>Tracked in</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="m">R1</td>
+            <td>Stock reads scanned the whole movement table</td>
+            <td><span class="pill pass">Resolved P2b</span></td>
+            <td class="m">—</td>
+            <td class="m">handoff §Risks 1</td>
+          </tr>
+          <tr>
+            <td class="m">R2</td>
+            <td>Server had no <code>stock_movements</code> table</td>
+            <td><span class="pill pass">Resolved P2b</span></td>
+            <td class="m">—</td>
+            <td class="m">handoff §Risks 2</td>
+          </tr>
+          <tr>
+            <td class="m">R3</td>
+            <td>Backfill cannot be re-run; no path to rebuild the log</td>
+            <td><span class="pill warn">High</span></td>
+            <td class="m no">No</td>
+            <td class="m">handoff §Risks 3</td>
+          </tr>
+          <tr>
+            <td class="m">R4</td>
+            <td>Dual write enforced only by a manual browser test</td>
+            <td><span class="pill warn">Medium</span></td>
+            <td class="m no">No</td>
+            <td class="m">handoff §Risks 4</td>
+          </tr>
+          <tr>
+            <td class="m">R5</td>
+            <td><code>ref_type</code> + <code>ref_id</code> is not unique</td>
+            <td><span class="pill low">Low</span></td>
+            <td class="m no">No</td>
+            <td class="m">handoff §Risks 5</td>
+          </tr>
+          <tr>
+            <td class="m">R6</td>
+            <td>Reconstruction ordering is approximate</td>
+            <td><span class="pill low">Low</span></td>
+            <td class="m no">No</td>
+            <td class="m">handoff §Risks 6</td>
+          </tr>
+          <tr>
+            <td class="m">F1</td>
+            <td>Any authenticated user can claim any pharmacy as owner</td>
+            <td><span class="pill crit">Critical</span></td>
+            <td class="m"><span class="yes">In P3 scope</span></td>
+            <td class="m">new — untracked</td>
+          </tr>
+          <tr>
+            <td class="m">F2</td>
+            <td>Backup / restore silently drops the whole stock ledger</td>
+            <td><span class="pill warn">High</span></td>
+            <td class="m no">No</td>
+            <td class="m">new — untracked</td>
+          </tr>
+          <tr>
+            <td class="m">F3</td>
+            <td>Backfilled movement ids are not UUIDs; server rejects them</td>
+            <td><span class="pill warn">High</span></td>
+            <td class="m no">No</td>
+            <td class="m">new — untracked</td>
+          </tr>
+          <tr>
+            <td class="m">F4</td>
+            <td><code>markSynced()</code> collides with the append-only guard</td>
+            <td><span class="pill warn">Medium</span></td>
+            <td class="m no">No</td>
+            <td class="m">handoff §P2b, last ¶</td>
+          </tr>
+          <tr>
+            <td class="m">F5</td>
+            <td>Invite codes are readable across every tenant</td>
+            <td><span class="pill warn">Medium</span></td>
+            <td class="m"><span class="yes">In P3 scope</span></td>
+            <td class="m">new — untracked</td>
+          </tr>
+          <tr>
+            <td class="m">F6</td>
+            <td>Soft-delete filtering inconsistent in reports and dashboard</td>
+            <td><span class="pill warn">Medium</span></td>
+            <td class="m no">No</td>
+            <td class="m">new — untracked</td>
+          </tr>
+          <tr>
+            <td class="m">F7</td>
+            <td><code>deleteBatch()</code> moves visible stock with no movement</td>
+            <td><span class="pill low">Low</span></td>
+            <td class="m no">No</td>
+            <td class="m">new — untracked</td>
+          </tr>
+          <tr>
+            <td class="m">F8</td>
+            <td>Dead code with no lint gate to catch more of it</td>
+            <td><span class="pill low">Low</span></td>
+            <td class="m no">No</td>
+            <td class="m">new — untracked</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ FINDINGS ============ -->
+  <section id="findings">
+    <h2 class="sec">Section 2</h2>
+    <h3 class="sec-title">Findings in detail</h3>
+
+    <div class="finding crit">
+      <div class="finding-head">
+        <span class="fid">F1</span>
+        <h4>Any authenticated user can claim any pharmacy as its owner</h4>
+        <span class="pill crit">Critical</span>
+        <span class="pill p3">P3 scope</span>
+      </div>
+      <p>The insert policy on <code>profiles</code> validates <em>who</em> you are but never <em>which tenant</em> you attach yourself to:</p>
+      <pre>create policy profile_insert on profiles
+  for insert with check (<b>user_id = auth.uid()</b>);   -- pharmacy_id unchecked</pre>
+      <p>Today a second claim is blocked, but only by accident: <code>profiles.user_id</code> is the primary key, so an existing member cannot insert a second row. A user with <em>no</em> profile row has nothing to collide with. Verified live against the committed schema:</p>
+      <p class="evidence-label">Evidence — user C exists in auth, belongs to nothing</p>
+      <pre>set role authenticated; set app.uid = '3333…3333';
+insert into profiles (user_id, pharmacy_id, role)
+values ('3333…3333', '<b>bbbb…00b1</b>', 'owner');
+<span class="no">INSERT 0 1</span>
+
+auth_pharmacy_id = bbbbbbbb-0000-0000-0000-0000000000b1
+sales visible:     <span class="no">1</span>
+customers visible: <span class="no">1</span>
+is_owner =         <span class="no">true</span></pre>
+      <p class="verdict-line">The attacker needs a pharmacy id, which is not secret: it is generated on the device, stored in <code>localStorage.fp_pharmacy_id</code>, and stamped onto every row that will ever sync. <code>pharmacy_insert</code> lets anyone create a pharmacy, so a normal signup supplies the account to attack from.</p>
+      <p><strong>Why this matters most for P3.</strong> The plan replaces <code>profiles(user_id PK)</code> with <code>memberships(user_id + pharmacy_id PK)</code>. That removes the only thing currently holding this shut, and turns a one-shot accident into a repeatable one. <code>docs/P3-PLAN.md</code> covers validating the <em>active</em> pharmacy in <code>auth_pharmacy_id()</code> (line 137) but says nothing about the insert policy. It needs to.</p>
+    </div>
+
+    <div class="finding warn">
+      <div class="finding-head">
+        <span class="fid">F2</span>
+        <h4>Backup and restore silently drop the entire stock ledger</h4>
+        <span class="pill warn">High</span>
+      </div>
+      <p><code>ALL_TABLES</code> in <code>src/lib/db/local.ts:351</code> lists 16 tables and omits <code>stock_movements</code>. Both <code>exportAll()</code> and <code>importAll()</code> iterate that list and nothing else.</p>
+      <ul class="tight">
+        <li><strong>Restore onto a fresh device</strong> (the phone-was-lost case): the ledger comes back empty. Every movement ever recorded is gone.</li>
+        <li><strong>Restore onto a device that already has movements:</strong> <code>importAll()</code> never clears <code>stock_movements</code>, so the old device's movements survive next to wholesale-replaced business rows, referencing batch and sale ids that no longer exist.</li>
+      </ul>
+      <p>Displayed stock survives, because <code>qty_in_stock</code> is in the backup and screens read the cache — P2b happens to protect this case — and <code>planCacheRebuild()</code>'s no-history guard stops the empty log from zeroing anything. But the log the architecture calls the source of truth is destroyed by the feature the app actively nags the user to run every seven days.</p>
+      <p><strong>This compounds R3.</strong> The backfill runs only inside the Dexie v4 upgrade, which fires once per device, so a restored device can never rebuild what it lost. The settings screen's <code>!hasMovements</code> branch tells the user <span class="mono">"অ্যাপটি একবার বন্ধ করে আবার খুলুন"</span> — close and reopen the app — which cannot work, because the upgrade will not run again.</p>
+      <p class="verdict-line">Note for whoever fixes it: adding the table to <code>ALL_TABLES</code> is not sufficient on its own, because <code>importAll()</code> calls <code>table.clear()</code> and the append-only guard registers a <code>deleting</code> hook that throws. The restore path needs a deliberate answer, not a one-line list edit.</p>
+    </div>
+
+    <div class="finding warn">
+      <div class="finding-head">
+        <span class="fid">F3</span>
+        <h4>Every backfilled movement will be rejected by the server</h4>
+        <span class="pill warn">High</span>
+      </div>
+      <p><code>backfillId()</code> in <code>src/lib/stock/reconstruct.ts:77</code> returns <code>mv-&lt;refType&gt;-&lt;refId&gt;</code>, and that string is used as the movement's <code>id</code> at lines 103 and 159. The server column added in P2b is <code>id uuid primary key</code>.</p>
+      <p class="evidence-label">Evidence — against the committed schema</p>
+      <pre>insert into stock_movements (id, …) values ('<b>mv-sale_item-abc</b>', …);
+<span class="no">ERROR:  invalid input syntax for type uuid: "mv-sale_item-abc"</span></pre>
+      <p>Only movements created after the upgrade are affected — those go through <code>buildMovement()</code>, which calls <code>uuid()</code>. Everything the P2 migration generated, which is the whole of each device's pre-migration history, would fail on first push.</p>
+      <p>Same class of problem, one line away: <code>medicine_id: medicineOf.get(batchId) ?? ''</code> (reconstruct.ts:105) can emit an empty string into a <code>uuid not null</code> column.</p>
+    </div>
+
+    <div class="finding warn">
+      <div class="finding-head">
+        <span class="fid">F4</span>
+        <h4><code>markSynced()</code> cannot clear <code>dirty</code> on a movement</h4>
+        <span class="pill warn">Medium</span>
+        <span class="pill pass">Already documented</span>
+      </div>
+      <p>Confirmed in code. <code>attachSyncHooks()</code> (local.ts:188) registers an <code>updating</code> hook on every table in <code>SYNCED_TABLES</code>, which includes <code>stock_movements</code>; <code>attachAppendOnlyGuard()</code> (local.ts:164) then registers a second <code>updating</code> hook on the same table that throws unconditionally. <code>markSynced()</code> (sync/state.ts:86) is a plain <code>table.update(id, { dirty: 0, … })</code>, so push would mark a movement sent and immediately throw.</p>
+      <p>The handoff records this. Listed here so the register is complete.</p>
+    </div>
+
+    <div class="finding warn">
+      <div class="finding-head">
+        <span class="fid">F5</span>
+        <h4>Invite codes are readable across every tenant</h4>
+        <span class="pill warn">Medium</span>
+        <span class="pill p3">P3 scope</span>
+      </div>
+      <p><code>invite_lookup</code> grants <code>select</code> on any invite that is unused and unexpired, with no tenant predicate — deliberately, so a code can be checked before you belong anywhere. The effect is that every authenticated user can enumerate every live invitation in the system.</p>
+      <p class="evidence-label">Evidence — user A, a member of pharmacy A only</p>
+      <pre>select pharmacy_id, code, role from invites;
+aaaa…00a1 | code-aaaa | staff
+<span class="no">bbbb…00b1 | code-bbbb | staff</span>   &lt;- another pharmacy's live code</pre>
+      <p>If joining a pharmacy is done by presenting a code, this is a cross-tenant join path, not merely an information leak. P3 owns invites and membership, so it is the right phase to close it — for example by looking codes up through a <code>security definer</code> function that returns only a yes-or-no, rather than by a readable policy.</p>
+    </div>
+
+    <div class="finding warn">
+      <div class="finding-head">
+        <span class="fid">F6</span>
+        <h4>Soft-delete filtering is inconsistent, and the docs say it isn't</h4>
+        <span class="pill warn">Medium</span>
+      </div>
+      <p>The handoff states: <em>"Every read filters deleted rows out (<code>isLive</code>, <code>liveArray</code>)."</em> Many reads filter on <code>status === 'completed'</code> and never look at <code>deleted_at</code> — <code>data.ts</code> lines 201–203, 619, 718–721, 793–799 and 835–843, covering the dashboard, the daily report, the monthly report and the cash summary.</p>
+      <p>Harmless today, because the six tables that are ever soft-deleted are customers, customer ledger, expense categories, batches, medicines and cash sessions; sales, expenses and due payments are cancelled rather than deleted. It stops being harmless the moment the sync engine applies a <code>deleted_at</code> tombstone from another device, at which point deleted rows start counting toward today's takings.</p>
+    </div>
+
+    <div class="finding low">
+      <div class="finding-head">
+        <span class="fid">F7</span>
+        <h4><code>deleteBatch()</code> moves visible stock without a movement</h4>
+        <span class="pill low">Low</span>
+      </div>
+      <p><code>data.ts:1420</code> refuses to delete a batch that has stock entries, sale items, adjustments or return items. A batch carrying only a backfilled <code>opening_balance</code> movement passes all four guards. It is then soft-deleted, vanishes from every screen, and its movement stays live and orphaned.</p>
+      <p>Not a correctness bug — <code>verifyStockIntegrity()</code> and <code>planCacheRebuild()</code> both filter to live batches, so nothing mismatches. But it is a tenth stock-affecting path, its transaction does not include <code>stock_movements</code>, and the ledger no longer explains a change the user can see. A <code>write_off</code> movement would be the honest record.</p>
+    </div>
+
+    <div class="finding low">
+      <div class="finding-head">
+        <span class="fid">F8</span>
+        <h4>Dead code, and nothing in the toolchain to catch more of it</h4>
+        <span class="pill low">Low</span>
+      </div>
+      <p><strong><code>STOCK_SOURCE</code> is fully gone from code</strong> — zero references across <code>.ts</code>, <code>.tsx</code> and <code>.sql</code>. It survives only in two prose mentions in the handoff, one of which is wrong (see M2).</p>
+      <ul class="tight">
+        <li><code>computeBatchQty()</code> and <code>computeAllBatchQty()</code> — <code>movements.ts:70, 76</code>. Zero call sites since P2b removed the last one. Exported, documented, unreachable.</li>
+        <li><code>recomputeStockCache()</code> — no caller. Expected, since the sync engine does not exist, but it means the repair path in the P2b design is unreachable from the running app.</li>
+        <li><code>formatTaka</code> — unused import, <code>dashboard/page.tsx:8</code>.</li>
+        <li>Unused generic <code>&lt;T&gt;</code> on <code>markDeleted</code>, <code>data.ts:40</code>.</li>
+        <li><code>public/brand/*.svg</code> — four files, roughly 53 kB shipped in the export, referenced by nothing. <code>BrandMark.tsx</code> inlines its own SVG.</li>
+      </ul>
+      <p>None of these are caught by the toolchain: <code>tsconfig.json</code> sets <code>strict</code> but not <code>noUnusedLocals</code>, and there is no ESLint configuration, so <code>next build</code> skips linting entirely and <code>next lint</code> drops into interactive setup. There is no lint gate at all.</p>
+    </div>
+  </section>
+
+  <!-- ============ DOCS ============ -->
+  <section id="docs">
+    <h2 class="sec">Section 3</h2>
+    <h3 class="sec-title">Docs versus code</h3>
+    <p>Each claim in <code>docs/PHASE-HANDOFF.md</code> was checked against what the code does, not merely against whether the file exists. The substance holds up well: the P2b design, the append-only enforcement, the server table mirroring, the frozen <code>SYNCED_TABLES_V3</code> and the stamping rules are all accurate. Eleven things are not.</p>
+
+    <div class="scroller">
+      <table>
+        <thead><tr><th>ID</th><th>Claim</th><th>Reality</th></tr></thead>
+        <tbody>
+          <tr><td class="m">M1</td><td>"Last updated after commit <code>3aba084</code>" (line 6)</td><td>Current through <code>361d3d1</code>, two commits later.</td></tr>
+          <tr><td class="m">M2</td><td>"<code>STOCK_SOURCE</code> in <code>data.ts</code> flips stock reads back to the counter in one word" (line 194)</td><td><strong>False, and self-contradicting.</strong> Line 354 of the same file says the switch is gone. It is: zero code references. A reader hitting line 194 first will look for a rollback lever that does not exist.</td></tr>
+          <tr><td class="m">M3</td><td>"19 tables, 16 policies" (line 53)</td><td>20 tables with RLS, 60 policies: 20 select, 19 insert, 19 update, 1 all, 1 delete.</td></tr>
+          <tr><td class="m">M4</td><td>"<code>local.ts</code> — schema versions 1–3" (line 411)</td><td>Declares v1 through <strong>v4</strong>.</td></tr>
+          <tr><td class="m">M5</td><td>"<code>qty_in_stock</code> … is heading towards being a maintained cache" (line 252)</td><td>It <em>is</em> one, since P2b. Decision 5 predates the change it now describes.</td></tr>
+          <tr><td class="m">M6</td><td>"run the I5 browser test afterwards" — stated twice as mandatory</td><td>No such test exists in the repository. It was a manual procedure in a past session. There is nothing a developer can run.</td></tr>
+          <tr><td class="m">M7</td><td>Branding work (commit <code>a913948</code>)</td><td><strong>Entirely absent</strong> from the handoff: <code>BrandMark.tsx</code>, <code>public/brand/</code>, <code>brand/</code> (40 tracked files), the favicon and Apple touch icon, and the manifest theme colour change to <code>#0A1D37</code>. Recorded only in the Claude project docs.</td></tr>
+          <tr><td class="m">M8</td><td><code>docs/TESTING.md</code></td><td>Describes a codebase that no longer exists: two test files (there are seven), Supabase RPCs <code>create_sale</code>, <code>record_due_payment</code>, <code>v_stock_status</code>, <code>forbid_delete</code>, and an outbox flush — the outbox was explicitly rejected in P1.</td></tr>
+          <tr><td class="m">M9</td><td><code>docs/SECURITY-CHECKLIST.md</code></td><td>Still titled <span class="mono">আশ শিফা ফার্মেসী (local-only)</span> and asserts data never leaves the device — the opposite of the product direction.</td></tr>
+          <tr><td class="m">M10</td><td>"<code>data.ts</code> — ~1,400 lines"</td><td>1,467. Trivial, listed for completeness.</td></tr>
+          <tr><td class="m">M11</td><td>P1: "writing into another pharmacy is rejected"</td><td>True for business tables, verified again today. It was never tested against <code>profiles</code> itself — which is exactly where F1 lives.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p style="margin-top:22px"><strong>Code not reflected in docs.</strong> Beyond M7: the nine stock-mutating transactions in <code>data.ts</code> were verified one by one — nine <code>buildMovement</code> call sites, nine transaction scopes including <code>d.stock_movements</code>, and the dual write intact at every one. That matches the docs. <code>deleteBatch()</code> (F7) is a tenth stock-affecting path the docs do not mention.</p>
+  </section>
+
+  <!-- ============ TESTS ============ -->
+  <section id="tests">
+    <h2 class="sec">Section 4</h2>
+    <h3 class="sec-title">Test coverage gaps</h3>
+    <p>The structural cause is one line: <code>vitest.config.ts</code> sets <code>environment: 'node'</code> with no IndexedDB shim. Every function that touches Dexie is therefore untestable as the project stands, and all 104 passing tests cover pure logic only.</p>
+
+    <p class="evidence-label">Untested and load-bearing</p>
+    <div class="scroller">
+      <table>
+        <thead><tr><th>Function</th><th>File</th><th>What silent breakage costs</th></tr></thead>
+        <tbody>
+          <tr><td class="m">runBackfillInTransaction</td><td class="m">stock/backfill.ts</td><td>The migration itself. Its pure innards are heavily tested; the transaction wrapper, the skip guard and the abort path are not.</td></tr>
+          <tr><td class="m">writeCheckpointInTransaction</td><td class="m">db/checkpoint.ts</td><td>The safety net every migration depends on. <code>selectCheckpointsToPrune</code> and <code>verifyCheckpoint</code> are tested; the writer is not.</td></tr>
+          <tr><td class="m">exportAll / importAll</td><td class="m">db/local.ts</td><td>Where F2 lives. A test asserting round-trip completeness would have caught it.</td></tr>
+          <tr><td class="m">markSynced + 8 others</td><td class="m">sync/state.ts</td><td>Where F4 lives. Only the pure retry helpers are covered.</td></tr>
+          <tr><td class="m">verifyStockIntegrity, recomputeStockCache</td><td class="m">stock/movements.ts</td><td>The verification and repair path the whole P2b design rests on.</td></tr>
+          <tr><td class="m">All 10 exports</td><td class="m">auth.ts</td><td>PIN hashing, five-attempt lockout, phone-based reset. Security-adjacent and entirely unverified by automation.</td></tr>
+          <tr><td class="m">All 9 stock-mutating functions</td><td class="m">data.ts</td><td>The dual-write invariant I5. Nothing at compile time or test time catches a tenth path added without a movement.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="evidence-label">Verified by hand in a past session, never codified</p>
+    <ul class="tight">
+      <li><strong>P1 echo loop.</strong> A simulated pull of ten server rows selecting zero rows for push. Proved in a browser; no test.</li>
+      <li><strong>P2 invariants I1–I8.</strong> Run against a seeded database with a cancelled sale, cancelled stock entry, cancelled adjustment and two returns. No fixture in the repo reproduces it.</li>
+      <li><strong>P2b drift check.</strong> Add stock, sell, confirm cache equals log. Browser only.</li>
+      <li><strong>P2b cache repair.</strong> <code>recomputeStockCache()</code> restoring a drifted counter from 999 to 40, leaving <code>dirty: 0</code>, idempotent on a second run. Exercised through a temporary window hook that was correctly removed before committing — and with it, the only evidence.</li>
+      <li><strong>Every RLS run,</strong> including this one. Valuable, repeatable, and not in the repository. A committed <code>.sql</code> harness would make it a command rather than a memory.</li>
+    </ul>
+
+    <p class="evidence-label">What is genuinely solid</p>
+    <ul class="tight">
+      <li><strong>The cross-check pair earns its keep.</strong> <code>independentReplay</code> and <code>reconstructMovements</code> really are written differently, and the tests exercise the <em>disagreement</em> path, not just agreement — <code>stock-reconstruct.test.ts:290</code> feeds a deliberately broken replay and asserts the check fails, and <code>:298</code> drops a sale and asserts the same. That is the difference between a guard and a decoration.</li>
+      <li><strong>Fixtures are realistic.</strong> Cancelled sales, cancelled entries, cancelled adjustments, multiple returns on one sale and soft-deleted rows are all covered.</li>
+      <li><strong>No tests reference removed functionality.</strong> Nothing mentions <code>STOCK_SOURCE</code>.</li>
+      <li><strong>Weak assertions are rare:</strong> two found — <code>toBeDefined()</code> at <code>stock-reconstruct.test.ts:146</code> and <code>toBeTruthy()</code> at <code>business-rules.test.ts:44</code> — and both sit beside stronger assertions on the same value.</li>
+    </ul>
+  </section>
+
+  <!-- ============ RLS ============ -->
+  <section id="rls">
+    <h2 class="sec">Section 5</h2>
+    <h3 class="sec-title">Independent security re-verification</h3>
+    <p>Run today against the committed SQL on a scratch PostgreSQL 16 database, not against a remembered result. Schema and policies applied over a minimal <code>auth</code> stub, two pharmacies seeded with one row in every RLS-protected table, then queried as a non-owning <code>authenticated</code> role so RLS actually applies. The real schema was never touched.</p>
+
+    <div class="scroller">
+      <table class="matrix">
+        <thead>
+          <tr>
+            <th>Table</th><th>Sees own</th><th>Sees B</th><th>Insert&nbsp;→B</th><th>Update B</th><th>Move&nbsp;→B</th><th>Delete own</th><th>Anon</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>app_settings</td><td class="m">1</td><td class="m">0</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m">0</td></tr>
+          <tr><td>audit_logs</td><td class="m">1</td><td class="m">0</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m">0</td></tr>
+          <tr><td>batches</td><td class="m">1</td><td class="m">0</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m">0</td></tr>
+          <tr><td>cash_sessions</td><td class="m">1</td><td class="m">0</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m">0</td></tr>
+          <tr><td>customer_ledger</td><td class="m">1</td><td class="m">0</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m">0</td></tr>
+          <tr><td>customers</td><td class="m">1</td><td class="m">0</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m">0</td></tr>
+          <tr><td>due_payments</td><td class="m">1</td><td class="m">0</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m">0</td></tr>
+          <tr><td>expense_categories</td><td class="m">1</td><td class="m">0</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m">0</td></tr>
+          <tr><td>expenses</td><td class="m">1</td><td class="m">0</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m">0</td></tr>
+          <tr><td>medicines</td><td class="m">1</td><td class="m">0</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m">0</td></tr>
+          <tr><td>sale_items</td><td class="m">1</td><td class="m">0</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m">0</td></tr>
+          <tr><td>sale_return_items</td><td class="m">1</td><td class="m">0</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m">0</td></tr>
+          <tr><td>sale_returns</td><td class="m">1</td><td class="m">0</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m">0</td></tr>
+          <tr><td>sales</td><td class="m">1</td><td class="m">0</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m">0</td></tr>
+          <tr><td>stock_adjustments</td><td class="m">1</td><td class="m">0</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m">0</td></tr>
+          <tr><td>stock_entries</td><td class="m">1</td><td class="m">0</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m">0</td></tr>
+          <tr><td>stock_movements</td><td class="m">1</td><td class="m">0</td><td class="m yes">blocked</td><td class="m yes">0 rows</td><td class="m yes">0 rows</td><td class="m yes">0 rows</td><td class="m">0</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p style="margin-top:18px"><strong>All 17 business tables isolated.</strong> One nuance worth recording: for <code>stock_movements</code>, the tenant-move attempt reports <span class="mono">0 rows</span> rather than a policy rejection. There is no update policy at all, so the statement matches nothing before any <code>with check</code> is evaluated. Same outcome, different mechanism — and it means the append-only trigger never fires through RLS, because RLS filters the row away first. The trigger is the second line of defence, and it was tested separately as such.</p>
+
+    <p class="evidence-label">Append-only trigger, owner level, RLS bypassed</p>
+    <pre>update stock_movements set qty_delta = 999;
+<span class="ok">ERROR:  stock_movements append-only: উল্টো চিহ্নের নতুন সারি লিখুন</span>
+
+delete from stock_movements;
+<span class="ok">ERROR:  stock_movements append-only: উল্টো চিহ্নের নতুন সারি লিখুন</span>
+
+insert into stock_movements (…) values (…);
+<span class="ok">INSERT 0 1</span></pre>
+
+    <p class="evidence-label">Constraints on the movements table</p>
+    <pre>reason = 'teleport'                    <span class="ok">rejected</span>  check constraint
+duplicate client_txn_id, same pharmacy <span class="ok">rejected</span>  unique (pharmacy_id, client_txn_id)
+same client_txn_id, other pharmacy     <span class="ok">accepted</span>  correct: tenants are independent
+id = 'mv-sale_item-abc'                <span class="no">rejected</span>  invalid uuid  <b>&lt;- finding F3</b></pre>
+
+    <p style="margin-top:22px"><strong>Tenant tables.</strong> <code>pharmacies</code> and <code>profiles</code> behave correctly for reads: user A sees one pharmacy, cannot fetch B's by id, cannot rename it, sees only its own members and cannot delete B's. The failure is on insert, and it is F1. <code>invites</code> is readable across tenants by design, and that is F5.</p>
+
+    <p><strong>The server table mirrors the local type exactly.</strong> Compared field by field against <code>StockMovement</code> in <code>src/types/db.ts</code>: all 14 columns present, and all seven values of <code>MovementReason</code> match the check constraint in the same order. The P2b claim holds.</p>
+  </section>
+
+  <!-- ============ BUILD ============ -->
+  <section id="build">
+    <h2 class="sec">Section 6</h2>
+    <h3 class="sec-title">Build and runtime</h3>
+    <p>Run against an exact copy of the committed tree, tree hash <code>3cfae08</code>.</p>
+
+    <div class="scroller">
+      <table>
+        <thead><tr><th>Check</th><th>Result</th><th>Detail</th></tr></thead>
+        <tbody>
+          <tr><td class="m">tsc --noEmit</td><td class="yes">pass</td><td>0 errors, 0 warnings. <code>strict: true</code>.</td></tr>
+          <tr><td class="m">vitest run</td><td class="yes">pass</td><td><strong>104 / 104</strong> across 7 files, 2.60&nbsp;s. 0 failed, 0 skipped.</td></tr>
+          <tr><td class="m">next build</td><td class="yes">pass</td><td>Compiled successfully. 18 static routes, 87.4&nbsp;kB shared JS. No warnings.</td></tr>
+          <tr><td class="m">next lint</td><td class="no">not configured</td><td>No ESLint config. The build skips linting silently; <code>next lint</code> drops into interactive setup. <strong>There is no lint gate.</strong></td></tr>
+          <tr><td class="m">--noUnusedLocals</td><td class="no">2 findings</td><td>Not the project's setting. <code>formatTaka</code> and the unused generic <code>&lt;T&gt;</code> — see F8.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p style="margin-top:20px">One environment note for future sessions: <code>next build</code> cannot run in the cloud container without a workaround, because <code>next/font/google</code> needs Google Fonts and that host is blocked. The verification build here stubbed the <code>Noto_Sans_Bengali</code> import in a throwaway copy. Building through the device bridge times out, so the container remains the practical place to verify a build.</p>
+  </section>
+
+  <!-- ============ OTHER ============ -->
+  <section id="other">
+    <h2 class="sec">Section 7</h2>
+    <h3 class="sec-title">Also worth knowing</h3>
+    <ul class="tight">
+      <li><strong>The window to fix F1 and F5 for free is still open.</strong> The SQL has never been applied to a live Supabase project. Editing files no database has consumed costs nothing; the same change after launch is a migration against live accounts.</li>
+      <li><strong><code>pharmacy_insert</code> lets any authenticated user create a pharmacy</strong> — <code>with check (auth.uid() is not null)</code>. Correct for signup on its own. Combined with F1 it supplies the legitimate account an attacker operates from.</li>
+      <li><strong>The v4 checkpoint is correct.</strong> It snapshots <code>SYNCED_TABLES_V3</code>, 14 tables, deliberately excluding <code>stock_movements</code> — which is empty before the upgrade that creates it. No gap here.</li>
+      <li><strong>Two hooks, one table, right order.</strong> <code>attachSyncHooks</code> runs before <code>attachAppendOnlyGuard</code>, so a movement is stamped and then refused. The net behaviour is correct; it is only <code>markSynced</code> (F4) that needs the guard to make an exception it currently cannot.</li>
+      <li><strong>No TODO, FIXME, HACK or deprecation markers anywhere in <code>src/</code>,</strong> and no leftover feature flags beyond the ones listed in F8. For a codebase four phases into a rewrite, that is unusually tidy.</li>
+      <li><strong>The service worker shell list is stale but harmless</strong> — <code>public/sw.js</code> caches <code>/</code>, <code>/dashboard/</code>, <code>/sales/</code>, <code>/add-stock/</code> and the manifest, under a cache key still named <code>asshifa-shell-v2</code>. Everything else is cached on demand.</li>
+    </ul>
+  </section>
+
+  <p class="footnote">
+    Read-only audit. No file in <code>D:\MyApps\As Sifha Permacy</code> was created, modified or deleted.
+    Code inspection ran against an extracted copy of tree <code>3cfae08</code>; SQL verification ran against a
+    scratch database built from the committed <code>supabase/*.sql</code> and dropped afterwards. Findings
+    F1–F8 and mismatches M1–M11 are not yet tracked in any repository document.
+  </p>
+
+</div>

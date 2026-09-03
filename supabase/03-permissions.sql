@@ -54,3 +54,26 @@ insert into role_permissions (role, permission)
 select 'accountant', p from unnest(array[
   'records.read','reports.read'
 ]) as p;
+
+-- ============================================================
+-- বসানো হয়েছে কিনা, এখানেই যাচাই (ঝুঁকি R8)
+-- ============================================================
+-- ফাইলটি অর্ধেক চললে বা ভুল ক্রমে চললে এখানেই ধরা পড়ে — পরে
+-- অ্যাপ নিঃশব্দে read-only হয়ে যাওয়ার বদলে।
+do $$
+declare
+  missing text;
+begin
+  select string_agg(role::text, ', ')
+    into missing
+    from permissions_health()
+   where not ok;
+
+  if missing is not null then
+    raise exception 'এই ভূমিকাগুলোতে কোনো অনুমতি বসেনি: %', missing;
+  end if;
+
+  raise notice 'অনুমতি বসানো হয়েছে — % টি সারি, % টি ভূমিকা',
+    (select count(*) from role_permissions),
+    (select count(*) from permissions_health());
+end $$;

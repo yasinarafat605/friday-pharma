@@ -38,7 +38,10 @@ run "$HERE/01-schema.sql"
 run "$HERE/02-policies.sql"
 run "$HERE/03-permissions.sql"
 
-# অনুমতি: Supabase-এ এটি স্বয়ংক্রিয়, স্থানীয় পরীক্ষায় হাতে দিতে হয়
+# অনুমতি: Supabase-এ এটি স্বয়ংক্রিয়, স্থানীয় পরীক্ষায় হাতে দিতে হয়।
+# মন দিন — এটি 04-column-security.sql-এর **আগে** চলে, ঠিক যেমন Supabase-এ
+# নতুন টেবিলে grant বসে। টেবিল-স্তরের grant কলামের revoke মুছে দেয়,
+# তাই 04 সবার শেষে।
 psql -q -v ON_ERROR_STOP=1 -d "$TESTDB" <<'SQL' >/dev/null
 grant usage on schema public, auth to authenticated;
 grant select, insert, update, delete on all tables in schema public to authenticated;
@@ -46,6 +49,9 @@ grant select on all tables in schema auth to authenticated;
 grant execute on all functions in schema public to authenticated;
 grant execute on all functions in schema auth to authenticated;
 SQL
+
+# সবার শেষে — টেবিল-স্তরের grant কলামের revoke মুছে দেয়, তাই এটিই ক্রম
+run "$HERE/04-column-security.sql"
 
 status=0
 psql -v ON_ERROR_STOP=1 -d "$TESTDB" -f "$HERE/test-isolation.sql" || status=$?

@@ -79,6 +79,21 @@ exception when others then
   values (grp, label, false, 'অপ্রত্যাশিত ত্রুটি ' || sqlstate || ': ' || sqlerrm);
 end $$;
 
+-- ত্রুটি ওঠা **এবং** বার্তাটি ঠিক হওয়া — নিঃশব্দে false আর স্পষ্ট
+-- অভিযোগের পার্থক্যটা এখানেই ধরা পড়ে (ঝুঁকি R8)।
+create or replace function t_raises(grp text, label text, q text, needle text)
+returns void language plpgsql as $$
+begin
+  execute q;
+  insert into t_results(grp, label, passed, detail)
+  values (grp, label, false, 'কোনো ত্রুটিই ওঠেনি (নিঃশব্দে চলে গেছে)');
+exception when others then
+  insert into t_results(grp, label, passed, detail)
+  values (grp, label, position(needle in sqlerrm) > 0,
+          sqlstate || ': ' || split_part(sqlerrm, E'\n', 1));
+end $$;
+
+grant execute on function t_raises(text,text,text,text)   to authenticated;
 grant execute on function t_count(text,text,text,bigint)  to authenticated;
 grant execute on function t_blocked(text,text,text)       to authenticated;
 grant execute on function t_allowed(text,text,text)       to authenticated;
@@ -143,6 +158,26 @@ insert into stock_movements (id, pharmacy_id, batch_id, medicine_id, qty_delta, 
    'e0000000-0000-0000-0000-0000000000a1', 'd0000000-0000-0000-0000-0000000000a1', 50, 'purchase', '2026-09-01', 'mv-a1'),
   ('a1000000-0000-0000-0000-0000000000b1', 'bbbbbbbb-0000-0000-0000-0000000000b1',
    'e0000000-0000-0000-0000-0000000000b1', 'd0000000-0000-0000-0000-0000000000b1', 40, 'purchase', '2026-09-01', 'mv-b1');
+
+-- ক্রয়মূল্য বহনকারী সারি — R9 পরীক্ষার জন্য
+insert into sale_items (id, pharmacy_id, sale_id, medicine_id, batch_id,
+                        qty, unit_price_paisa, cost_price_paisa, line_total_paisa) values
+  ('11110000-0000-0000-0000-0000000000a1', 'aaaaaaaa-0000-0000-0000-0000000000a1',
+   'f0000000-0000-0000-0000-0000000000a1', 'd0000000-0000-0000-0000-0000000000a1',
+   'e0000000-0000-0000-0000-0000000000a1', 2, 500, 300, 1000),
+  ('11110000-0000-0000-0000-0000000000b1', 'bbbbbbbb-0000-0000-0000-0000000000b1',
+   'f0000000-0000-0000-0000-0000000000b1', 'd0000000-0000-0000-0000-0000000000b1',
+   'e0000000-0000-0000-0000-0000000000b1', 4, 500, 250, 2000);
+
+insert into stock_entries (id, pharmacy_id, client_txn_id, batch_id, qty,
+                           purchase_price_paisa, sale_price_paisa, entry_date) values
+  ('22220000-0000-0000-0000-0000000000a1', 'aaaaaaaa-0000-0000-0000-0000000000a1',
+   'se-a1', 'e0000000-0000-0000-0000-0000000000a1', 50, 300, 500, '2026-09-01'),
+  ('22220000-0000-0000-0000-0000000000b1', 'bbbbbbbb-0000-0000-0000-0000000000b1',
+   'se-b1', 'e0000000-0000-0000-0000-0000000000b1', 40, 250, 500, '2026-09-01');
+
+update batches set purchase_price_paisa = 300, sale_price_paisa = 500
+ where pharmacy_id = 'aaaaaaaa-0000-0000-0000-0000000000a1';
 
 insert into expense_categories (id, pharmacy_id, name, bn_name) values
   ('b0000000-0000-0000-0000-0000000000a1', 'aaaaaaaa-0000-0000-0000-0000000000a1', 'others', 'অন্যান্য');
@@ -476,6 +511,126 @@ select t_allowed('৮ movements', 'নিজের দোকানে নড়�
     values (gen_random_uuid(),'aaaaaaaa-0000-0000-0000-0000000000a1',
             'e0000000-0000-0000-0000-0000000000a1','d0000000-0000-0000-0000-0000000000a1',
             -1,'sale','2026-09-02','mv-a2')$$);
+
+-- ============================================================
+-- ৯। R9 — ক্রয়মূল্য কলাম স্তরে সুরক্ষিত
+-- ============================================================
+--
+-- RLS সারি আটকায়, কলাম নয়। ক্যাশিয়ার sale_items-এর সারিটি পড়তে পারেন
+-- (বেচতে হলে দরকার), কিন্তু cost_price_paisa পড়তে পারলে বিক্রয়মূল্যের
+-- সাথে মিলিয়ে মুনাফা বের করে ফেলতেন।
+
+set app.uid = '44444444-4444-4444-4444-444444444444';   -- ক্যাশিয়ার, reports.read নেই
+reset app.active_pharmacy;
+
+select t_count('৯ R9', 'ক্যাশিয়ার বিক্রয়ের সারি পড়তে পারেন',
+  $$select count(*) from sale_items$$, 1);
+select t_count('৯ R9', 'ক্যাশিয়ার বিক্রয়মূল্য পড়তে পারেন',
+  $$select count(*) from (select unit_price_paisa from sale_items) x$$, 1);
+select t_raises('৯ R9', 'ক্যাশিয়ার ক্রয়মূল্য পড়তে পারেন না',
+  $$select cost_price_paisa from sale_items$$, 'permission denied');
+select t_raises('৯ R9', 'ক্যাশিয়ার ব্যাচের ক্রয়মূল্য পড়তে পারেন না',
+  $$select purchase_price_paisa from batches$$, 'permission denied');
+select t_raises('৯ R9', 'ক্যাশিয়ার চালানের ক্রয়মূল্য পড়তে পারেন না',
+  $$select purchase_price_paisa from stock_entries$$, 'permission denied');
+select t_raises('৯ R9', 'select * দিয়েও বেরোয় না',
+  $$select * from sale_items$$, 'permission denied');
+select t_count('৯ R9', 'ক্যাশিয়ার costs view-এ কিছু পান না',
+  $$select count(*) from v_sale_item_costs$$, 0);
+
+set app.uid = '55555555-5555-5555-5555-555555555555';   -- স্টক কর্মী, reports.read নেই
+select t_raises('৯ R9', 'স্টক কর্মীও ক্রয়মূল্য পড়তে পারেন না',
+  $$select purchase_price_paisa from batches$$, 'permission denied');
+select t_count('৯ R9', 'স্টক কর্মী costs view-এ কিছু পান না',
+  $$select count(*) from v_batch_costs$$, 0);
+
+set app.uid = '66666666-6666-6666-6666-666666666666';   -- হিসাবরক্ষক, reports.read আছে
+select t_count('৯ R9', 'হিসাবরক্ষক costs view পড়তে পারেন',
+  $$select count(*) from v_sale_item_costs$$, 1);
+select t_value('৯ R9', 'ক্রয়মূল্য সঠিক মান দেখায়',
+  $$select cost_price_paisa::text from v_sale_item_costs$$, '300');
+select t_value('৯ R9', 'মুনাফা হিসাব হয়ে আসে',
+  $$select margin_paisa::text from v_sale_item_costs$$, '400');
+select t_count('৯ R9', 'হিসাবরক্ষক ব্যাচের খরচও দেখেন',
+  $$select count(*) from v_batch_costs$$, 2);   -- ম্যানেজারের পরীক্ষায় একটি ব্যাচ যোগ হয়েছিল
+select t_count('৯ R9', 'হিসাবরক্ষক চালানের খরচও দেখেন',
+  $$select count(*) from v_stock_entry_costs$$, 1);
+select t_raises('৯ R9', 'তবু সরাসরি টেবিল থেকে নয় — পথ একটাই',
+  $$select cost_price_paisa from sale_items$$, 'permission denied');
+
+set app.uid = '11111111-1111-1111-1111-111111111111';   -- মালিক A
+select t_count('৯ R9', 'মালিক নিজের দোকানের খরচ দেখেন',
+  $$select count(*) from v_sale_item_costs$$, 1);
+-- view গুলো definer-অধিকারে চলে, তাই দোকানের শর্ত তাদের নিজেদের ভেতরে।
+-- শর্তটি বাদ পড়লে এটিই cross-tenant ফাঁস হতো — তাই আলাদা করে পরীক্ষা।
+select t_count('৯ R9', 'view-এ অন্য দোকানের সারি আসে না',
+  $$select count(*) from v_sale_item_costs
+     where pharmacy_id = 'bbbbbbbb-0000-0000-0000-0000000000b1'$$, 0);
+select t_count('৯ R9', 'ব্যাচের view-ও এক দোকানেই সীমাবদ্ধ',
+  $$select count(*) from v_batch_costs
+     where pharmacy_id = 'bbbbbbbb-0000-0000-0000-0000000000b1'$$, 0);
+set app.uid = '99999999-9999-9999-9999-999999999999';   -- সদস্যপদ নেই
+select t_count('৯ R9', 'সদস্যপদহীন ব্যবহারকারীর জন্য view ফাঁকা',
+  $$select count(*) from v_sale_item_costs$$, 0);
+select t_count('৯ R9', 'সদস্যপদহীন ব্যবহারকারীর জন্য ব্যাচের view-ও ফাঁকা',
+  $$select count(*) from v_batch_costs$$, 0);
+
+-- লেখা আগের মতোই চলে: ক্রয়মূল্য বসানো যায়, পড়া যায় না
+set app.uid = '11111111-1111-1111-1111-111111111111';
+select t_allowed('৯ R9', 'ক্রয়মূল্য লেখা যায় (স্টক ঢোকানোর জন্য দরকার)',
+  $$insert into stock_entries (id, pharmacy_id, client_txn_id, batch_id, qty,
+                               purchase_price_paisa, sale_price_paisa, entry_date)
+    values (gen_random_uuid(),'aaaaaaaa-0000-0000-0000-0000000000a1','se-a2',
+            'e0000000-0000-0000-0000-0000000000a1',10,320,520,'2026-09-02')$$);
+
+-- ============================================================
+-- ১০। R8 — অনুমতির তালিকা না বসলে চুপ করে থাকা চলবে না
+-- ============================================================
+--
+-- সবার শেষে, কারণ এখানে তালিকাটি সাময়িকভাবে খালি করা হয়।
+-- শেষে আবার ফিরিয়ে দেওয়া হয় এবং সেটিও যাচাই করা হয়।
+
+reset role;
+reset app.uid;
+
+select t_value('১০ R8', 'বসানো অবস্থায় permissions_seeded() সত্য',
+  'select permissions_seeded()::text', 'true');
+select t_count('১০ R8', 'পাঁচটি ভূমিকার সবগুলোতেই অনুমতি আছে',
+  'select count(*) from permissions_health() where not ok', 0);
+select t_count('১০ R8', 'স্বাস্থ্য পরীক্ষা পাঁচটি ভূমিকা দেখায়',
+  'select count(*) from permissions_health()', 5);
+
+create temp table t_saved_permissions as select * from role_permissions;
+delete from role_permissions;
+
+select t_value('১০ R8', 'তালিকা মুছলে permissions_seeded() মিথ্যা',
+  'select permissions_seeded()::text', 'false');
+select t_count('১০ R8', 'স্বাস্থ্য পরীক্ষা পাঁচটি ভূমিকাকেই ব্যর্থ দেখায়',
+  'select count(*) from permissions_health() where not ok', 5);
+
+set role authenticated;
+set app.uid = '11111111-1111-1111-1111-111111111111';
+
+-- আগে এখানে নিঃশব্দে false ফিরত আর সব কিছু আটকে যেত, কোনো বার্তা ছাড়াই।
+select t_raises('১০ R8', 'has_permission চুপ করে false দেয় না, অভিযোগ করে',
+  $$select has_permission('records.read')$$, '03-permissions.sql');
+select t_raises('১০ R8', 'সাধারণ select-ও স্পষ্ট বার্তা দিয়ে থামে',
+  $$select count(*) from customers$$, '03-permissions.sql');
+select t_raises('১০ R8', 'বার্তায় কী করতে হবে তা লেখা আছে',
+  $$select count(*) from sales$$, 'role_permissions');
+
+reset role;
+reset app.uid;
+insert into role_permissions select * from t_saved_permissions;
+drop table t_saved_permissions;
+
+select t_value('১০ R8', 'ফিরিয়ে দেওয়ার পর আবার সবুজ',
+  'select permissions_seeded()::text', 'true');
+
+set role authenticated;
+set app.uid = '11111111-1111-1111-1111-111111111111';
+select t_count('১০ R8', 'ফিরিয়ে দেওয়ার পর গ্রাহক আবার দেখা যায়',
+  'select count(*) from customers', 1);
 
 -- ============================================================
 -- ফলাফল

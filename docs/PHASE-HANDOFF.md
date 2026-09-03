@@ -3,7 +3,7 @@
 > Read this before changing anything. It exists so a new session can pick up
 > the work without re-deriving decisions that were already made deliberately.
 >
-> Last updated after P3. Next work item is authentication (Supabase Auth).
+> Last updated after P3a (R8 and R9). Next work item is authentication.
 
 ---
 
@@ -275,6 +275,8 @@ already diagnosed and fixed.
 - ✅ P3 membership architecture: `memberships`, five roles, `role_permissions`
   plus `has_permission()`, a validating active-pharmacy resolver, and the
   isolation suite checked into the repo
+- ✅ P3a hardening: a missing permission seed now fails loudly (R8), and cost
+  columns are protected at the column level (R9)
 
 **Not started**
 
@@ -302,6 +304,32 @@ The old `profile_insert` policy checked `user_id = auth.uid()` and never checked
 
 **F5. Invite codes were readable across every tenant. RESOLVED in P3.**
 The old `invite_lookup` policy had no tenant predicate at all.
+
+**R8. A missing permission seed was silent. RESOLVED in P3a.**
+
+**R9. Cost columns leaked to roles without `reports.read`. RESOLVED in P3a.**
+
+**R12. `has_permission()` now costs an extra existence check per call.** It runs
+inside policies, per row. Harmless at today's scale and with no live data, but it
+is the first thing to measure if policy evaluation ever looks slow.
+
+**R13. The allowed-column list in `04-column-security.sql` is manual.** Add a
+column to `batches`, `stock_entries` or `sale_items` without adding it there and
+nobody can read it. Fail-closed, but confusing when it bites.
+
+**R14. The sync engine cannot `select *` from those three tables.** It has to
+pull the permitted projection, and pull cost through the `v_*_costs` views for
+roles that hold `reports.read`. A naive `select *` fails with permission denied.
+Whoever builds sync needs to know this before designing the pull.
+
+**R15. The `v_*_costs` views carry their own tenant predicate.** They are
+definer-rights, so RLS is not behind them. Removing `pharmacy_id =
+auth_pharmacy_id()` from a view definition would be a cross-tenant leak that
+nothing else would catch. The isolation suite tests it; keep those cases.
+
+**R16. A missing seed now breaks reads as well as writes.** That is the point —
+loud beats silent — but it means a health check must use `permissions_seeded()`
+or `permissions_health()`, never a business-table query.
 
 **3. The backfill cannot be re-run.** It skips when movements already exist, and
 the append-only hook blocks deleting them. If a reconstruction bug is found
@@ -477,6 +505,95 @@ screen. P3 prepares the database and stops.
 
 ---
 
+## P3a — R8 and R9
+
+**Commit `P3A_COMMIT`.** SQL only. No application file changed, and nothing in
+P1, P2, P2b or the core P3 membership structure was touched.
+
+### R8 — a missing seed is no longer silent
+
+If `03-permissions.sql` never ran, `role_permissions` was empty, every
+`has_permission()` returned false, and the app became read-only with no error,
+no log and nothing to search for. Three layers now:
+
+| What | Where | Use |
+|---|---|---|
+| `permissions_seeded()` | `01-schema.sql` | cheap boolean, for a health route |
+| `permissions_health()` | `01-schema.sql` | per-role counts and an `ok` flag |
+| `has_permission()` raises | `01-schema.sql` | the failure surfaces where it bites |
+| seed self-check | end of `03-permissions.sql` | a half-applied seed fails on the spot |
+
+`has_permission()` raises **only when the whole table is empty**, which is a
+deployment fault. A user with no membership, or a role that genuinely lacks a
+permission, still gets a plain `false` — those are ordinary access decisions.
+
+The message names the file to run and the hint names the diagnostic:
+
+```
+ERROR:  role_permissions ফাঁকা — supabase/03-permissions.sql চালানো হয়নি
+HINT:   যাচাই করুন: select * from permissions_health();
+```
+
+**Diagnostics must not query a business table.** A missing seed makes those
+raise too. Use `permissions_seeded()` and `permissions_health()`, which do not
+go through any policy.
+
+### R9 — cost columns are protected at the column level
+
+RLS decides which **rows** you see, never which **columns**. A cashier is denied
+`reports.read`, so the reports screen is closed to them — but nothing stopped
+`select cost_price_paisa from sale_items`, and they can already see the selling
+price. Margin, straight out.
+
+Three columns carry cost. All three are now revoked from `authenticated`:
+
+- `batches.purchase_price_paisa`
+- `stock_entries.purchase_price_paisa`
+- `sale_items.cost_price_paisa`
+
+Selling prices stay open on purpose — a cashier cannot sell without them, and
+hiding the cost side is enough to hide the margin.
+
+Postgres cannot revoke one column out of a table-level grant, so
+`04-column-security.sql` revokes `select` on the table and grants back the
+allowed columns by name. **A new column on any of those three tables must be
+added to that list or nobody will be able to read it.** Fail-closed is the right
+default here, but it will look like a bug when it happens.
+
+Reading cost, for roles that hold `reports.read`, goes through three views:
+`v_batch_costs`, `v_stock_entry_costs`, `v_sale_item_costs`. They run with
+**definer rights**, because the caller has no privilege on the column at all —
+which means each view carries `pharmacy_id = auth_pharmacy_id()` in its own
+`where` clause rather than leaning on RLS. Delete that line and it becomes a
+cross-tenant leak with nothing behind it to catch the mistake. The isolation
+suite tests exactly that.
+
+Writes are unchanged: cost can still be written, just not read back.
+
+### Ordering matters
+
+`04-column-security.sql` runs **last**. Supabase grants table-level privileges
+on new tables to `authenticated`, and a table-level grant undoes the column
+revoke. `run-isolation-test.sh` reproduces that order deliberately.
+
+### The suite grew
+
+**116 cases, up from 85.** Twenty-one new R9 cases and ten new R8 cases.
+
+```
+bash supabase/run-isolation-test.sh
+```
+
+### No application code was involved
+
+Nothing under `src/` reads these columns from PostgreSQL, because nothing under
+`src/` talks to PostgreSQL at all yet — the app is still entirely local Dexie.
+The three columns exist in `src/types/db.ts` and are read by `data.ts` and four
+pages, but only ever out of IndexedDB. The moment a Supabase client appears,
+see R14 below.
+
+---
+
 ## Next Starting Point
 
 > **Authentication: Supabase Auth on top of the membership model P3 built.**
@@ -530,8 +647,10 @@ real project exists.
   `auth_pharmacy_id()` before changing anything about tenancy
 - `supabase/02-policies.sql` — every policy, with the `with check` rule above
 - `supabase/03-permissions.sql` — who may do what. Change roles here, not in policies
-- `supabase/test-isolation.sql` + `run-isolation-test.sh` — 85 cases; run on every
-  policy change
+- `supabase/04-column-security.sql` — cost-column grants and the `v_*_costs`
+  views. **Runs last.** Read the comment at the top before editing
+- `supabase/test-isolation.sql` + `run-isolation-test.sh` — 116 cases; run on
+  every policy or grant change
 - `supabase/00-test-harness.sql` — the local `auth` stub. **Test only.** Supabase
   provides the real one; running this against a live project would be a mistake
 - None of it has been applied anywhere yet
@@ -584,5 +703,11 @@ real project exists.
   finding F5. Code validation for non-members goes through `invite_preview()`.
 - **Do not change a policy without re-running `supabase/run-isolation-test.sh`.**
   It is checked in precisely so this is one command.
+- **Do not add a column to `batches`, `stock_entries` or `sale_items` without
+  updating the grant list in `04-column-security.sql`.** It will be unreadable.
+- **Do not remove the `pharmacy_id = auth_pharmacy_id()` line from a `v_*_costs`
+  view.** They are definer-rights; RLS is not behind them.
+- **Do not run `04-column-security.sql` before the table grants.** A table-level
+  grant wipes the column revoke. It goes last, always.
 - **Do not add a new store to `SYNCED_TABLES_V3`.** It is frozen because devices
   still on v2 replay that upgrade. Use `SYNCED_TABLES`.

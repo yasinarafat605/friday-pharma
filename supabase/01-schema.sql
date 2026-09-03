@@ -171,26 +171,78 @@ as $$
    where m.user_id = auth.uid() and m.pharmacy_id = auth_pharmacy_id()
 $$;
 
-/*
- * অনুমতি আছে কিনা — ভূমিকার নাম নয়, তালিকা দেখে।
- * Policy-তে 'sales.cancel' লেখা থাকে; কোন ভূমিকা সেটি পায় তা
- * role_permissions-এর সারি বদলেই পাল্টানো যায়।
- */
-create or replace function has_permission(perm text)
+-- ------------------------------------------------------------
+-- অনুমতির তালিকা আদৌ বসানো হয়েছে কিনা (ঝুঁকি R8)
+-- ------------------------------------------------------------
+--
+-- 03-permissions.sql না চালালে role_permissions ফাঁকা থাকে, আর তখন
+-- has_permission() সবসময় false দিত — অ্যাপ নিঃশব্দে read-only হয়ে যেত।
+-- কোনো ত্রুটি নয়, কোনো লগ নয়, কিছুই না। খুঁজে বের করা প্রায় অসম্ভব।
+--
+-- এখন সেটি চুপচাপ "না" নয়, স্পষ্ট "এই জিনিসটি নেই" — নিচের তিনটি স্তরে।
+
+-- ১. সহজ প্রশ্ন: বসানো হয়েছে?
+create or replace function permissions_seeded()
 returns boolean
 language sql
 stable
 security definer
 set search_path = public
 as $$
-  select exists (
+  select exists (select 1 from role_permissions)
+$$;
+
+-- ২. স্বাস্থ্য পরীক্ষা: প্রতিটি ভূমিকায় কয়টি অনুমতি আছে।
+--    health-check route বা ops-এর জন্য: select * from permissions_health();
+create or replace function permissions_health()
+returns table (role member_role, permission_count bigint, ok boolean)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select r.role,
+         count(rp.permission),
+         count(rp.permission) > 0
+    from (select unnest(enum_range(null::member_role)) as role) r
+    left join role_permissions rp on rp.role = r.role
+   group by r.role
+   order by r.role
+$$;
+
+/*
+ * অনুমতি আছে কিনা — ভূমিকার নাম নয়, তালিকা দেখে।
+ * Policy-তে 'sales.cancel' লেখা থাকে; কোন ভূমিকা সেটি পায় তা
+ * role_permissions-এর সারি বদলেই পাল্টানো যায়।
+ *
+ * তালিকাটি একেবারে ফাঁকা হলে এটি ব্যর্থতা নয়, স্থাপনার ভুল — তাই
+ * চুপচাপ false না দিয়ে স্পষ্ট বার্তা দিয়ে থেমে যায় (ঝুঁকি R8)।
+ * সদস্যপদ না থাকা বা অনুমতি না থাকা কিন্তু স্বাভাবিক — সেগুলো false-ই।
+ */
+create or replace function has_permission(perm text)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+begin
+  if not exists (select 1 from role_permissions) then
+    raise exception
+      using errcode = 'P0001',
+            message = 'role_permissions ফাঁকা — supabase/03-permissions.sql চালানো হয়নি',
+            hint    = 'যাচাই করুন: select * from permissions_health();';
+  end if;
+
+  return exists (
     select 1
       from memberships m
       join role_permissions rp on rp.role = m.role
      where m.user_id = auth.uid()
        and m.pharmacy_id = auth_pharmacy_id()
        and rp.permission = perm
-  )
+  );
+end;
 $$;
 
 -- বিলিং ও মালিকানার জন্য — বাকি সব জায়গায় has_permission ব্যবহার করুন
