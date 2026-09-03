@@ -167,6 +167,61 @@ create table stock_entries (
 );
 create index on stock_entries (pharmacy_id, updated_at);
 
+-- ------------------------------------------------------------
+-- স্টকের নড়াচড়া — শুধু যোগ হয়, কখনো বদলায় না, কখনো মোছে না
+-- ------------------------------------------------------------
+-- ডিভাইসের `stock_movements` টেবিলের হুবহু প্রতিরূপ (src/types/db.ts →
+-- StockMovement)। এটি না থাকলে সিঙ্ক প্রতিটি নড়াচড়া নিঃশব্দে ফেলে দিত।
+--
+-- batches.qty_in_stock হলো দ্রুত পড়ার জন্য রাখা **হিসাব করা সংখ্যা**।
+-- সত্যিকারের ইতিহাস এই টেবিলে। মিল না থাকলে এখান থেকেই আবার গোনা হয়।
+--
+-- reason-এর তালিকা src/types/db.ts-এর MovementReason-এর সাথে এক রাখতে হবে।
+create table stock_movements (
+  id            uuid primary key,
+  pharmacy_id   uuid not null references pharmacies(id) on delete cascade,
+  batch_id      uuid not null,
+  medicine_id   uuid not null,
+  qty_delta     numeric not null,               -- বিক্রয়ে ঋণাত্মক, ক্রয়ে ধনাত্মক
+  reason        text not null check (reason in (
+                  'opening_balance','purchase','sale','adjustment',
+                  'return','write_off','reversal')),
+  ref_type      text,                           -- 'sale_item', 'stock_entry', ...
+  ref_id        uuid,
+  business_date date not null,                  -- স্থানীয় দিনপঞ্জি, রিপোর্টের জন্য
+  created_at    timestamptz not null default now(),
+  client_txn_id text not null,
+  note          text,
+  updated_at    timestamptz not null default now(),
+  -- অন্য টেবিলের সাথে মিল রাখতে রাখা হয়েছে; append-only বলে সবসময় null
+  deleted_at    timestamptz,
+  unique (pharmacy_id, client_txn_id)           -- একই নড়াচড়া দুবার উঠবে না
+);
+create index on stock_movements (pharmacy_id, updated_at);
+create index on stock_movements (pharmacy_id, batch_id);
+create index on stock_movements (pharmacy_id, business_date);
+
+-- ডেটাবেসই বদল ও মোছা আটকায় (ডিভাইসে Dexie hook যা করে, তারই জোড়া)।
+-- RLS-এ update বা delete policy নেই, তবু service key দিয়েও যেন ভুল করে
+-- ইতিহাস বদলে না যায়। সত্যিই দরকার হলে trigger সাময়িক বন্ধ করতে হবে —
+-- অর্থাৎ কাজটি ইচ্ছাকৃত ও দৃশ্যমান।
+create or replace function stock_movements_append_only()
+returns trigger
+language plpgsql
+as $$
+begin
+  raise exception 'stock_movements append-only: উল্টো চিহ্নের নতুন সারি লিখুন';
+end;
+$$;
+
+create trigger stock_movements_no_update
+  before update on stock_movements
+  for each row execute function stock_movements_append_only();
+
+create trigger stock_movements_no_delete
+  before delete on stock_movements
+  for each row execute function stock_movements_append_only();
+
 create table customers (
   id                uuid primary key,
   pharmacy_id       uuid not null references pharmacies(id) on delete cascade,

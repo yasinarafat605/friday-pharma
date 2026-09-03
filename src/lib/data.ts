@@ -8,19 +8,7 @@ import {
 } from '@/lib/db/local';
 import { isExpired, thresholdFor } from '@/lib/business-rules';
 import { toBanglaDigits } from '@/lib/money';
-import { buildMovement, computeAllBatchQty } from '@/lib/stock/movements';
-
-/**
- * স্টকের পরিমাণ কোথা থেকে পড়া হবে।
- *
- * 'movements' — নড়াচড়ার যোগফল (স্বাভাবিক)।
- * 'counter'   — ব্যাচে লেখা পুরোনো সংখ্যা।
- *
- * নড়াচড়ায় সমস্যা দেখা দিলে এই একটি শব্দ বদলে পুরোনো আচরণে ফেরা যায়।
- * কাউন্টার এখনো প্রতিটি লেখায় হালনাগাদ হয়, তাই সেটি সঠিকই থাকে।
- * এটিই P2-র rollback ব্যবস্থা — তাই কাউন্টার সরানো যাবে না।
- */
-const STOCK_SOURCE: 'movements' | 'counter' = 'movements';
+import { buildMovement } from '@/lib/stock/movements';
 import type {
   StockRow, Customer, SaleItemInput, AdjustmentReason, Medicine, MedicineBatch,
   MedicineType, UnitType, AppSettings, ExpenseCategory, Expense,
@@ -76,6 +64,26 @@ function isActive(row: { status?: string }): boolean {
 // ============================================================
 // STOCK ROWS (medicines + batches + threshold/status)
 // ============================================================
+/**
+ * স্টকের পরিমাণ কোথা থেকে পড়া হয় — এবং কেন।
+ *
+ * `batches.qty_in_stock` হলো **হিসাব করা সংখ্যা (cache)**। পুরোনো ফেলে দেওয়া
+ * মাঠ নয়, আবার শেষ কথাও নয়। শেষ কথা `stock_movements` — শুধু যোগ হওয়া
+ * ইতিহাস। দুটি একই transaction-এ একসাথে লেখা হয় (dual write), তাই
+ * স্বাভাবিক অবস্থায় সবসময় সমান।
+ *
+ * পর্দা আঁকার সময় গোনা সংখ্যাটিই পড়া হয়। আগে প্রতিবার পুরো ইতিহাস যোগ
+ * করা হতো; বিক্রয়ের প্রতিটি লাইনে একটি করে সারি জমে বলে সেই খরচ দিন দিন
+ * বাড়তই — কমত না।
+ *
+ * ইতিহাস তবে কীসের জন্য:
+ *   ১. যাচাই ও মেলানো — `verifyStockIntegrity()` (সেটিংসের বাটন)।
+ *   ২. সিঙ্কে অন্য ডিভাইসের নড়াচড়া নামার পর আবার গোনা —
+ *      `recomputeStockCache()`।
+ *
+ * তাই dual write কখনো সরানো যাবে না: সেটি সরালে গোনা সংখ্যাটি আর
+ * ইতিহাসের সাথে মিলবে না, আর মেরামতের পথও থাকবে না।
+ */
 export async function fetchStockRows(): Promise<StockRow[]> {
   await ensureSeeded();
   const d = db();
@@ -85,15 +93,12 @@ export async function fetchStockRows(): Promise<StockRow[]> {
     getSettings(),
   ]);
   const medMap = new Map(meds.map((m) => [m.id, m]));
-  // নড়াচড়া থেকে হিসাব করা পরিমাণ। যে ব্যাচে কোনো নড়াচড়া নেই (যেমন
-  // মাইগ্রেশন হয়নি এমন ডিভাইস) সেখানে ব্যাচের নিজের সংখ্যাই ব্যবহার হয়।
-  const computed = STOCK_SOURCE === 'movements' ? await computeAllBatchQty() : new Map<string, number>();
   const today = new Date();
   const rows: StockRow[] = [];
   for (const b of batches) {
     const m = medMap.get(b.medicine_id);
     if (!m || !m.is_active) continue;
-    const qty = computed.has(b.id) ? computed.get(b.id)! : b.qty_in_stock;
+    const qty = b.qty_in_stock;   // হিসাব করা সংখ্যা — উপরের নোট দেখুন
     const th = m.low_stock_threshold ?? typeThreshold(m.type, settings);
     const status: StockRow['stock_status'] =
       qty <= 0 ? 'out' : qty <= th ? 'low' : 'normal';

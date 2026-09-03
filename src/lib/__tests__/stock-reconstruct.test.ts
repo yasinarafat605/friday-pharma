@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   reconstructMovements, verifyAgainstCounters, findNegativeDips, businessDateOf, backfillId,
+  planCacheRebuild,
   type ReconstructInput, type RBatch,
 } from '@/lib/stock/reconstruct';
 
@@ -311,5 +312,71 @@ describe('I3 — দুই পথে হিসাব মিলিয়ে দ�
     expect(crossCheckReplay(r.perBatch, independentReplay(wrongSign)).ok).toBe(true);
     expect(r.perBatch[0]!.replayed).toBe(88);      // 100 − 12
     expect(r.perBatch[0]!.opening).toBe(0);        // কোনো জের লাগেনি
+  });
+});
+
+// ============================================================
+// হিসাব করা সংখ্যা (cache) আবার গোনা
+// ============================================================
+//
+// পর্দা এখন `batches.qty_in_stock` পড়ে, ইতিহাস যোগ করে নয়। তাই এই
+// সংখ্যাটি কখন ঠিক করা হবে আর কখন ছোঁয়া হবে না — সেটাই এখানে বাঁধা।
+
+describe('planCacheRebuild', () => {
+  const mv = (batch: string, delta: number, deleted: string | null = null) =>
+    ({ batch_id: batch, qty_delta: delta, deleted_at: deleted });
+
+  it('দুই পথ মিললে কিছু বদলায় না', () => {
+    // I1: মাইগ্রেশনের পর যা দেখা যেত, তাই দেখা যায়।
+    const plan = planCacheRebuild([B('b1', 7)], [mv('b1', 10), mv('b1', -3)]);
+    expect(plan.fixes).toEqual([]);
+    expect(plan.checked).toBe(1);
+  });
+
+  it('গোনা সংখ্যা সরে গেলে ইতিহাস অনুযায়ী ঠিক হয়', () => {
+    const plan = planCacheRebuild([B('b1', 5)], [mv('b1', 10), mv('b1', -3)]);
+    expect(plan.fixes).toEqual([{ batch_id: 'b1', from: 5, to: 7 }]);
+  });
+
+  it('যে ব্যাচের কোনো নড়াচড়া নেই তাকে শূন্য করা হয় না', () => {
+    // সবচেয়ে জরুরি রক্ষাকবচ: ইতিহাস তৈরি হয়নি এমন ডিভাইসে এটি না থাকলে
+    // পুরো স্টক মুছে গিয়ে শূন্য হয়ে যেত।
+    const plan = planCacheRebuild([B('b1', 42)], []);
+    expect(plan.fixes).toEqual([]);
+    expect(plan.skipped).toBe(1);
+    expect(plan.checked).toBe(0);
+  });
+
+  it('মুছে ফেলা নড়াচড়া হিসাবে ধরা হয় না', () => {
+    const plan = planCacheRebuild([B('b1', 10)], [mv('b1', 10), mv('b1', -4, '2026-09-01T00:00:00.000Z')]);
+    expect(plan.fixes).toEqual([]);
+  });
+
+  it('মুছে ফেলা ব্যাচ বাদ যায়', () => {
+    const dead: RBatch = { ...B('b1', 999), deleted_at: '2026-09-01T00:00:00.000Z' };
+    const plan = planCacheRebuild([dead], [mv('b1', 1)]);
+    expect(plan.fixes).toEqual([]);
+    expect(plan.checked).toBe(0);
+  });
+
+  it('একাধিক ব্যাচে কেবল যেটি সরেছে সেটিই ঠিক হয়', () => {
+    const plan = planCacheRebuild(
+      [B('b1', 7), B('b2', 100), B('b3', 0)],
+      [mv('b1', 7), mv('b2', 40), mv('b3', 5), mv('b3', -5)],
+    );
+    expect(plan.fixes).toEqual([{ batch_id: 'b2', from: 100, to: 40 }]);
+    expect(plan.checked).toBe(3);
+  });
+
+  it('মাইগ্রেশনের ফল সরাসরি cache-এ বসানো যায়', () => {
+    // reconstructMovements যা বানায়, তা দিয়ে গোনা সংখ্যাটি হুবহু ফিরে আসে।
+    const inp = input({
+      batches: [B('b1', 88)],
+      stockEntries: [entry('e1', 'b1', 100)],
+      sales: [sale('s1')], saleItems: [item('i1', 's1', 'b1', 12)],
+    });
+    const r = reconstructMovements(inp);
+    const plan = planCacheRebuild(inp.batches, r.movements);
+    expect(plan.fixes).toEqual([]);            // ইতিহাস আর সংখ্যা একই কথা বলে
   });
 });

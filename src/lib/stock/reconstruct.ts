@@ -213,6 +213,37 @@ export function verifyAgainstCounters(
   return { ok: mismatches.length === 0, rows, mismatches };
 }
 
+export interface CacheFix { batch_id: string; from: number; to: number }
+
+/**
+ * ব্যাচে লেখা সংখ্যাটিকে নড়াচড়ার যোগফল দিয়ে ঠিক করার পরিকল্পনা।
+ *
+ * `batches.qty_in_stock` হলো **হিসাব করা সংখ্যা** (cache) — প্রতিটি পর্দায়
+ * পুরো ইতিহাস যোগ না করে দ্রুত দেখানোর জন্য। লেখার সময় নড়াচড়া আর এই
+ * সংখ্যা একসাথে বসে, তাই স্বাভাবিক অবস্থায় দুটি সমান থাকে। সিঙ্কে অন্য
+ * ডিভাইসের নড়াচড়া নামার পর এটিই আবার গুনে নেয়।
+ *
+ * একটি নিয়ম গুরুত্বপূর্ণ: যে ব্যাচের কোনো নড়াচড়াই নেই, তাকে ছোঁয়া হয় না।
+ * নইলে যে ডিভাইসে ইতিহাস তৈরি হয়নি সেখানে সব স্টক শূন্য হয়ে যেত।
+ */
+export function planCacheRebuild(
+  batches: { id: string; qty_in_stock: number; deleted_at?: string | null }[],
+  movements: { batch_id: string; qty_delta: number; deleted_at?: string | null }[],
+): { checked: number; skipped: number; fixes: CacheFix[] } {
+  const sums = sumByBatch(movements.filter(isLive));
+  const fixes: CacheFix[] = [];
+  let checked = 0;
+  let skipped = 0;
+  for (const b of batches) {
+    if (!isLive(b)) continue;
+    if (!sums.has(b.id)) { skipped += 1; continue; }   // ইতিহাস নেই — হাত দেওয়া হয় না
+    checked += 1;
+    const to = sums.get(b.id)!;
+    if (to !== b.qty_in_stock) fixes.push({ batch_id: b.id, from: b.qty_in_stock, to });
+  }
+  return { checked, skipped, fixes };
+}
+
 /**
  * কোনো সময়ে স্টক ঋণাত্মক হয়ে গিয়েছিল কিনা (নিয়ম I6)।
  * দোকান যা পায়নি তা বিক্রি করতে পারে না — তাই ঋণাত্মক মানে সাজানোর ক্রম

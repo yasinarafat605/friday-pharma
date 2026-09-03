@@ -270,11 +270,12 @@ already diagnosed and fixed.
 - ✅ P2 inventory migration (`3aba084`)
 - ✅ `stock_movements` implementation, local side
 - ✅ Stock integrity check shipped as a settings action
+- ✅ P2b stock cache split: server `stock_movements` table plus the read-path
+  fix (`fetchStockRows` reads the cache, movements verify and rebuild it)
 
 **Not started**
 
 - ⬜ P3 membership architecture
-- ⬜ `stock_movements` on the **server** (P2 was local only — see risks below)
 - ⬜ Authentication (Supabase Auth)
 - ⬜ Sync engine (push and pull)
 
@@ -284,20 +285,14 @@ already diagnosed and fixed.
 
 Recorded honestly so the next session does not rediscover them the hard way.
 
-**1. Stock reads now scan the whole movement table.** `fetchStockRows()` calls
-`computeAllBatchQty()`, which loads every movement on every inventory and
-dashboard load. Movements grow one row per sale line, far faster than batches
-did, so this is a performance regression on the hottest screens and it worsens
-forever. It is survivable today and `STOCK_SOURCE` can flip reads back, but the
-proper fix is to treat `qty_in_stock` as a **maintained cache** rather than
-either the truth or a legacy field: keep the dual write, read the cache, and use
-movements for verification and for recomputing after a sync pull. That is the
-better long-term design and should be settled before the sync engine lands.
+**1. Stock reads scanned the whole movement table. RESOLVED in `P2b`.**
+`fetchStockRows()` no longer replays movements. See "The stock cache split"
+below for the design and for why this must not be changed back.
 
-**2. The server has no `stock_movements` table.** P2 deliberately did not touch
-`supabase/*.sql`, so the local store has no server counterpart. Sync would drop
-every movement. **P3 must add it**, with `unique (pharmacy_id, client_txn_id)`
-like the other transactional tables.
+**2. The server had no `stock_movements` table. RESOLVED in `P2b`.**
+`supabase/01-schema.sql` now defines it and `supabase/02-policies.sql` gives it
+pharmacy-scoped RLS with **select and insert only**. The SQL has still never
+been applied to a live project.
 
 **3. The backfill cannot be re-run.** It skips when movements already exist, and
 the append-only hook blocks deleting them. If a reconstruction bug is found
@@ -323,10 +318,74 @@ a guarantee.
 
 ---
 
+## P2b — The stock cache split
+
+Two open risks from P2 were closed together, because they are one decision
+about where stock quantity lives.
+
+**`batches.qty_in_stock` is a maintained cache.** Not a legacy field, and not
+the source of truth. `stock_movements` is the truth: an append-only log that
+only ever grows. Both are written in the same transaction (the dual write),
+so in normal running they are always equal.
+
+**Screens read the cache.** `fetchStockRows()` reads `b.qty_in_stock`
+directly. It used to call `computeAllBatchQty()`, which loaded every movement
+on every inventory, dashboard, sales and stock-adjust load. Movements grow one
+row per sale line, so that cost rose forever and never fell.
+
+**The log is read for two things only:**
+
+1. Verification and reconciliation, through `verifyStockIntegrity()`, which
+   the settings screen already exposes as a button.
+2. Rebuilding the cache, through `recomputeStockCache()`. This is what the sync
+   engine must call after a pull: once another device's movements arrive, this
+   device's counted number is stale, and only the log can settle it.
+
+**One rule inside `planCacheRebuild()` matters more than the rest.** A batch
+with no movements at all is skipped, never zeroed. Without that guard, a device
+that had not run the P2 backfill would have its entire stock wiped to zero the
+first time the cache was rebuilt. There is a test for exactly this.
+
+**`recomputeStockCache()` writes `dirty: 0`.** The recomputed quantity is
+derived from movements that are already synced, so pushing it back would be
+noise, and on a slow link it would fight the server. It also preserves the
+row's existing `updated_at` for the same reason.
+
+**The `STOCK_SOURCE` switch is gone.** It selected between reading movements
+and reading the counter, and it was P2's read-side rollback lever. It is no
+longer meaningful: the cache is the read path, and the repair path is
+`recomputeStockCache()` rather than a code edit. **The dual write itself is
+unchanged and is still the rollback strategy** — it is what keeps the two in
+step and what makes rebuilding possible.
+
+**Server table.** `stock_movements` mirrors the local schema field for field,
+with `unique (pharmacy_id, client_txn_id)` like the other transactional tables
+and a `check` constraint carrying the same reason vocabulary as
+`MovementReason` in `src/types/db.ts`. Keep those two lists in step. Append-only
+is enforced twice on the server: RLS grants select and insert and nothing else,
+and a trigger raises on update or delete so that even a service key cannot
+quietly rewrite history. Repair work has to disable that trigger deliberately.
+
+**Verified against real PostgreSQL 16**, the same way P1 was: a second pharmacy
+cannot read or write another's movements, an update or delete through RLS
+affects nothing, the trigger rejects owner-level writes, a duplicate
+`client_txn_id` inside one pharmacy is rejected while the same value under a
+different pharmacy is accepted, and an unknown reason is rejected.
+
+**Known gap this exposes for the sync engine.** `markSynced()` clears `dirty`
+with `table.update(...)`, but the append-only hook on `stock_movements` throws
+on any update. Whoever builds push must clear the flag for movements another
+way rather than relaxing the hook.
+
+---
+
 ## Next Starting Point
 
 > **P3: replace the single-pharmacy `profiles` table with membership-based
-> access, and add the server-side tables P2 left behind.**
+> access.**
+>
+> The server-side `stock_movements` table that P3 was going to carry is
+> already done, in P2b. P3 is now purely the membership and permission work.
 
 **Read `docs/P3-PLAN.md`** for the full approach. In short:
 
@@ -356,7 +415,9 @@ no database has yet consumed. That stops being true the moment a project exists.
 **Stock**
 - `src/lib/stock/reconstruct.ts` — pure replay rules, read before changing stock
 - `src/lib/stock/backfill.ts` — the migration and its two cross-checks
-- `src/lib/stock/movements.ts` — writing, reading and `verifyStockIntegrity()`
+- `src/lib/stock/movements.ts` — writing, `verifyStockIntegrity()` and
+  `recomputeStockCache()`. The read helpers here scan the whole log; they are
+  verification tools and must not be called while drawing a screen
 
 **Sync**
 - `src/lib/sync/state.ts` — cursors, failures, retry timing. No sync engine yet
@@ -389,9 +450,13 @@ no database has yet consumed. That stops being true the moment a project exists.
 - **Do not rewrite the database without a migration.** Never rename
   `asshifa_local`, never drop a store, never remove a field. Every existing
   device holds real pharmacy accounts in that database.
-- **Do not remove `qty_in_stock` yet.** It stops being the source of truth
-  during P2 but must keep being written. That dual write is the entire rollback
-  strategy for the highest-risk change in the project.
+- **Do not remove `qty_in_stock`.** It is the maintained cache every screen
+  reads, and the dual write that keeps it correct is the rollback strategy for
+  the highest-risk change in the project.
+- **Do not make `fetchStockRows()` replay movements again.** That was the
+  performance regression fixed in P2b. If the displayed number looks wrong, the
+  answer is `verifyStockIntegrity()` and then `recomputeStockCache()`, not a
+  full scan on every page load.
 - **Do not start authentication before P2 and P3 are decided.** Auth built on
   the current single-pharmacy `profiles` table would have to be rewritten, and
   auth built before `stock_movements` would let real multi-device use start on
@@ -408,5 +473,7 @@ no database has yet consumed. That stops being true the moment a project exists.
 - **Do not add a stock-mutating path without a movement write** in the same
   transaction, and run the I5 browser test afterwards. Nothing at compile time
   will catch the omission.
+- **Do not give the server `stock_movements` table an update or delete
+  policy**, and do not drop its append-only trigger. Write a reversing movement.
 - **Do not add a new store to `SYNCED_TABLES_V3`.** It is frozen because devices
   still on v2 replay that upgrade. Use `SYNCED_TABLES`.

@@ -14,6 +14,7 @@ alter table app_settings       enable row level security;
 alter table medicines          enable row level security;
 alter table batches            enable row level security;
 alter table stock_entries      enable row level security;
+alter table stock_movements    enable row level security;
 alter table customers          enable row level security;
 alter table customer_ledger    enable row level security;
 alter table sales              enable row level security;
@@ -111,6 +112,18 @@ begin
     $f$, t);
   end loop;
 end $$;
+
+-- ============================================================
+-- স্টকের নড়াচড়া — পড়া ও লেখা যায়, বদলানো যায় না
+-- ============================================================
+-- উপরের লুপে এটিকে রাখা হয়নি, কারণ লুপ update policy-ও বানায়।
+-- এখানে ইচ্ছে করেই select আর insert ছাড়া কিছু নেই: নড়াচড়ার ইতিহাস
+-- একবার লেখা হলে আর বদলায় না (নিয়ম I7)। ভুল হলে উল্টো চিহ্নের নতুন
+-- সারি লেখা হয়। ডেটাবেসের trigger-ও একই কথা আলাদা করে নিশ্চিত করে।
+create policy stock_movements_tenant_select on stock_movements
+  for select using (pharmacy_id = auth_pharmacy_id());
+create policy stock_movements_tenant_insert on stock_movements
+  for insert with check (pharmacy_id = auth_pharmacy_id());
 
 -- আর্থিক রেকর্ড কখনো সত্যিই মুছে ফেলা যায় না — বাতিল করতে হয়।
 -- তাই কোনো delete policy নেই; delete চেষ্টা করলে শূন্য সারি প্রভাবিত হয়।

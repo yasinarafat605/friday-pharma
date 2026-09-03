@@ -10,7 +10,10 @@
 
 import { db, uuid, nowISO, todayISO, newClientTxnId } from '@/lib/db/local';
 import type { MovementReason, StockMovement } from '@/types/db';
-import { verifyAgainstCounters, businessDateOf, type VerifyRow } from '@/lib/stock/reconstruct';
+import {
+  verifyAgainstCounters, planCacheRebuild, businessDateOf,
+  type VerifyRow, type CacheFix,
+} from '@/lib/stock/reconstruct';
 
 // ============================================================
 // লেখা
@@ -57,6 +60,11 @@ export async function recordMovement(input: MovementInput): Promise<string> {
 // ============================================================
 // পড়া
 // ============================================================
+//
+// সতর্কতা: নিচের দুটি ফাংশন পুরো ইতিহাস পড়ে। এগুলো যাচাই ও মেরামতের
+// যন্ত্র — পর্দা আঁকার পথে ডাকা যাবে না। তালিকা দেখানোর সময়
+// `batches.qty_in_stock` (হিসাব করা সংখ্যা) পড়া হয়, কারণ প্রতি বিক্রয়ের
+// প্রতিটি লাইনে একটি করে সারি জমে, আর সেই ইতিহাস কেবল বাড়তেই থাকে।
 
 /** এক ব্যাচের বর্তমান পরিমাণ — নড়াচড়া যোগ করে। */
 export async function computeBatchQty(batchId: string): Promise<number> {
@@ -110,6 +118,49 @@ export async function verifyStockIntegrity(): Promise<IntegrityReport> {
   };
 }
 
+
+
+
+// ============================================================
+// হিসাব করা সংখ্যা আবার গোনা (সিঙ্কের পরে, বা মেরামতে)
+// ============================================================
+
+export interface CacheRebuildReport {
+  /** যত ব্যাচের ইতিহাস আছে। */
+  checked: number;
+  /** যত ব্যাচে কোনো নড়াচড়াই নেই — ছোঁয়া হয়নি। */
+  skipped: number;
+  fixes: CacheFix[];
+}
+
+/**
+ * `batches.qty_in_stock` আবার গুনে বসায়।
+ *
+ * কখন দরকার: সিঙ্ক অন্য ডিভাইসের নড়াচড়া নামিয়ে আনার পর — তখন ইতিহাস
+ * বেড়েছে কিন্তু এই ডিভাইসের গোনা সংখ্যাটি পুরোনো। যাচাইয়ে গরমিল ধরা
+ * পড়লেও এটিই মেরামতের পথ।
+ *
+ * নড়াচড়ায় হাত দেওয়া হয় না — সেগুলো append-only। কেবল গোনা সংখ্যাটি বসে।
+ * `dirty: 0` দেওয়া হয় ইচ্ছে করেই: এটি ব্যবহারকারীর নতুন কোনো তথ্য নয়,
+ * ইতিহাস থেকে বের করা মান, তাই সার্ভারে ঠেলে পাঠানোর দরকার নেই।
+ */
+export async function recomputeStockCache(): Promise<CacheRebuildReport> {
+  const d = db();
+  return d.transaction('rw', d.batches, d.stock_movements, async () => {
+    const [batches, movements] = await Promise.all([
+      d.batches.toArray(),
+      d.stock_movements.toArray(),
+    ]);
+    const plan = planCacheRebuild(batches, movements);
+    for (const fix of plan.fixes) {
+      const patch: Record<string, unknown> = { qty_in_stock: fix.to, dirty: 0 };
+      const row = batches.find((b) => b.id === fix.batch_id);
+      if (row?.updated_at) patch.updated_at = row.updated_at;   // সময় বদলানোর কারণ নেই
+      await d.batches.update(fix.batch_id, patch as never);
+    }
+    return plan;
+  });
+}
 
 
 export { businessDateOf };
