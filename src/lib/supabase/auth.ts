@@ -25,6 +25,29 @@ export interface AuthState {
 }
 
 /**
+ * সক্রিয় দোকান নির্ধারণের একমাত্র নিয়ম। signIn() আর AuthContext দুজনেই এটিই
+ * ডাকে, যাতে দুই জায়গায় দুই রকম আচরণ না হয়।
+ *
+ *   ১. সদস্যপদ না থাকলে null।
+ *   ২. একটিই সদস্যপদ হলে সেটিই — সংরক্ষিত পছন্দ যা-ই থাকুক।
+ *   ৩. একাধিক হলে: সংরক্ষিত পছন্দ এখনো বৈধ হলে সেটি, নইলে is_default,
+ *      নইলে তালিকার প্রথমটি। ভুয়া সংরক্ষিত মান কখনো মানা হয় না।
+ */
+export function resolveActivePharmacyId(
+  memberships: Membership[],
+  storedActive: string | null,
+): string | null {
+  if (memberships.length === 0) return null;
+  if (memberships.length === 1) return memberships[0].pharmacy_id;
+
+  if (storedActive && memberships.some((m) => m.pharmacy_id === storedActive)) {
+    return storedActive;
+  }
+  const defaultM = memberships.find((m) => m.is_default);
+  return defaultM ? defaultM.pharmacy_id : memberships[0].pharmacy_id;
+}
+
+/**
  * ১. সাইন আপ ও প্রথম মালিকানা প্রতিষ্ঠা (Bootstrap Owner)
  * ক্রম: Supabase Auth -> pharmacies-এ ইনসার্ট -> memberships-এ মালিক হিসেবে বুটস্ট্র্যাপ
  */
@@ -113,20 +136,7 @@ export async function signIn({
   if (mErr) throw new Error(`সদস্যপদ লোড ব্যর্থ: ${mErr.message}`);
 
   const memberships = (rawMemberships || []) as unknown as Membership[];
-  let resolvedPharmacyId: string | null = null;
-
-  if (memberships.length === 1) {
-    resolvedPharmacyId = memberships[0].pharmacy_id;
-  } else if (memberships.length > 1) {
-    const currentActive = getActivePharmacyId();
-    const matchesCurrent = currentActive && memberships.some((m) => m.pharmacy_id === currentActive);
-    if (matchesCurrent) {
-      resolvedPharmacyId = currentActive;
-    } else {
-      const defaultM = memberships.find((m) => m.is_default);
-      resolvedPharmacyId = defaultM ? defaultM.pharmacy_id : memberships[0].pharmacy_id;
-    }
-  }
+  const resolvedPharmacyId = resolveActivePharmacyId(memberships, getActivePharmacyId());
 
   setActivePharmacyId(resolvedPharmacyId);
 
@@ -150,9 +160,10 @@ export async function signOutUser(): Promise<void> {
  * ৪. আমন্ত্রণ কোড প্রিভিউ (R10 throttling সমন্বিত)
  */
 export async function previewInvite(code: string): Promise<InvitePreview | null> {
-  const supabase = getSupabaseClient();
   const trimmed = code.trim();
   if (!trimmed) return null;
+
+  const supabase = getSupabaseClient();
 
   const { data, error } = await supabase.rpc('invite_preview', {
     p_code: trimmed,
@@ -171,9 +182,10 @@ export async function previewInvite(code: string): Promise<InvitePreview | null>
  * ৫. আমন্ত্রণ কোড ব্যবহার করে দোকানে যোগ দেওয়া (redeem_invite)
  */
 export async function redeemInvite(code: string): Promise<string> {
-  const supabase = getSupabaseClient();
   const trimmed = code.trim();
   if (!trimmed) throw new Error('আমন্ত্রণ কোড দিন');
+
+  const supabase = getSupabaseClient();
 
   const { data, error } = await supabase.rpc('redeem_invite', {
     p_code: trimmed,
@@ -190,8 +202,11 @@ export async function redeemInvite(code: string): Promise<string> {
 
 /**
  * ৬. সক্রিয় দোকান পরিবর্তন (Pharmacy Switcher)
+ *
+ * null দেওয়া মানে "কোনো দোকান সক্রিয় নয়" — লগআউটের পরে বা শেষ সদস্যপদ
+ * ত্যাগ করার পরে ঠিক সেই অবস্থাই দরকার হয়।
  */
-export function switchActivePharmacy(pharmacyId: string): void {
+export function switchActivePharmacy(pharmacyId: string | null): void {
   setActivePharmacyId(pharmacyId);
 }
 

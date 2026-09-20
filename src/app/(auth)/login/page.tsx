@@ -19,9 +19,23 @@ import type { InvitePreview } from '@/types/db';
 type CloudTab = 'signin' | 'signup' | 'invite';
 type PinMode = 'loading' | 'setup' | 'enter' | 'reset';
 
+// ভূমিকার বাংলা নাম — আমন্ত্রণে কী দায়িত্ব দেওয়া হচ্ছে তা যোগ দেওয়ার আগেই বোঝা দরকার।
+const ROLE_BN: Record<string, string> = {
+  owner: 'মালিক',
+  manager: 'ম্যানেজার',
+  cashier: 'ক্যাশিয়ার',
+  inventory: 'স্টক কর্মী',
+  accountant: 'হিসাবরক্ষক',
+};
+function roleBn(role: string): string {
+  return ROLE_BN[role] ?? role;
+}
+
 export default function LoginPage() {
   const router = useRouter();
-  const { user, isConfigured, signOut, refreshMemberships, activePharmacyName } = useAuth();
+  const {
+    user, isConfigured, configError, signOut, refreshMemberships, activePharmacyName,
+  } = useAuth();
 
   const [pinMode, setPinMode] = useState<PinMode>('loading');
   const [cloudTab, setCloudTab] = useState<CloudTab>('signin');
@@ -45,6 +59,16 @@ export default function LoginPage() {
 
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+
+  // লগইন করা অবস্থায় যোগদানের প্যানেল আর PIN ফর্ম একসঙ্গে দেখা যায়, তাই
+  // যোগদানের বার্তা আলাদা রাখা হয়েছে — নইলে একই কথা দুবার দেখাত।
+  const [joinMsg, setJoinMsg] = useState<{ kind: 'error' | 'ok'; text: string } | null>(null);
+
+  // লগইন করা থাকলে বার্তা যোগদান-প্যানেলে, নইলে ট্যাবের উপরে।
+  function reportInvite(kind: 'error' | 'ok', text: string) {
+    if (user) setJoinMsg({ kind, text });
+    else setError(text);
+  }
 
   useEffect(() => {
     (async () => {
@@ -104,38 +128,55 @@ export default function LoginPage() {
   async function handlePreviewInvite(e: React.FormEvent) {
     e.preventDefault();
     setError('');
+    setJoinMsg(null);
     const code = inviteCode.trim();
-    if (!code) return setError('আমন্ত্রণ কোড দিন');
+    if (!code) return reportInvite('error', 'আমন্ত্রণ কোড দিন');
 
     setPreviewLoading(true);
     try {
       const data = await previewInvite(code);
       if (!data) {
-        setError('আমন্ত্রণ কোডটি ভুল বা এর মেয়াদ শেষ');
+        reportInvite('error', 'আমন্ত্রণ কোডটি ভুল বা এর মেয়াদ শেষ');
         setInvitePreviewData(null);
       } else {
         setInvitePreviewData(data);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'কোড যাচাই ব্যর্থ হয়েছে');
+      // invite_preview() পাঁচবার ভুলের পর থামিয়ে দেয় (R10) — সেই বার্তাটিও
+      // হুবহু ব্যবহারকারীর সামনে যায়, গিলে ফেলা হয় না।
+      reportInvite('error', err instanceof Error ? err.message : 'কোড যাচাই ব্যর্থ হয়েছে');
       setInvitePreviewData(null);
     } finally {
       setPreviewLoading(false);
     }
   }
 
+  /**
+   * আমন্ত্রণ গ্রহণ। ভূমিকা আমন্ত্রণ থেকেই আসে — এখানে memberships-এ সরাসরি
+   * কোনো insert নেই, সবটাই redeem_invite() RPC-র ভেতরে। সফল হলে সেই ফাংশনই
+   * নতুন pharmacy_id ফেরায় এবং সেটিই সক্রিয় দোকান হয়ে যায়।
+   */
   async function handleRedeemInvite() {
     setError('');
+    setJoinMsg(null);
     const code = inviteCode.trim();
-    if (!code) return setError('আমন্ত্রণ কোড দিন');
+    if (!code) return reportInvite('error', 'আমন্ত্রণ কোড দিন');
 
+    const joiningName = invitePreviewData?.pharmacy_name ?? '';
     setBusy(true);
     try {
       await redeemInvite(code);
       await refreshMemberships();
+      setInvitePreviewData(null);
+      setInviteCode('');
+      reportInvite('ok', joiningName
+        ? `${joiningName}-এ যোগ দেওয়া হয়েছে। এখন PIN দিয়ে ভেতরে ঢুকুন।`
+        : 'দোকানে যোগ দেওয়া হয়েছে। এখন PIN দিয়ে ভেতরে ঢুকুন।');
       setPinMode(isPinSet() ? 'enter' : 'setup');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'আমন্ত্রণ গ্রহণ ব্যর্থ হয়েছে');
+      // redeem_invite() ভুল/মেয়াদোত্তীর্ণ কোডে 'আমন্ত্রণ কোডটি ভুল বা মেয়াদ শেষ'
+      // তোলে, আর লগইন ছাড়া ডাকা হলে 'লগইন ছাড়া যোগ দেওয়া যাবে না'।
+      reportInvite('error', err instanceof Error ? err.message : 'আমন্ত্রণ গ্রহণ ব্যর্থ হয়েছে');
     } finally {
       setBusy(false);
     }
@@ -205,6 +246,73 @@ export default function LoginPage() {
     </div>
   );
 
+  /**
+   * আমন্ত্রণ কোডের অংশ। কোড *যাচাই* লগইন ছাড়াও চলে, কিন্তু *যোগ দেওয়া* চলে না —
+   * redeem_invite() auth.uid() ছাড়া কাজ করে না। তাই একই প্যানেল দুই অবস্থায়
+   * ব্যবহার হয়: লগইন না থাকলে যাচাই পর্যন্ত, লগইন থাকলে যোগ দেওয়া পর্যন্ত।
+   */
+  const invitePanel = (signedIn: boolean) => (
+    <div className="space-y-3">
+      <form onSubmit={handlePreviewInvite} className="space-y-2">
+        <label className="label" htmlFor={signedIn ? 'invite-code-signed' : 'invite-code'}>
+          আমন্ত্রণ কোড দিন
+        </label>
+        <div className="flex gap-2">
+          <input
+            id={signedIn ? 'invite-code-signed' : 'invite-code'}
+            type="text"
+            className="input uppercase font-mono tracking-wider"
+            value={inviteCode}
+            onChange={(e) => { setInviteCode(e.target.value); setInvitePreviewData(null); }}
+            placeholder="INVITE-A-..."
+            required
+          />
+          <button type="submit" className="btn-outline px-4 shrink-0" disabled={previewLoading || busy}>
+            {previewLoading ? '...' : 'যাচাই'}
+          </button>
+        </div>
+      </form>
+
+      {invitePreviewData && (
+        <div className="rounded-xl border border-brand/30 bg-brand-light/50 p-4 text-center space-y-2">
+          <p className="text-xs text-gray-500">আমন্ত্রণ পাওয়া গেছে:</p>
+          <p className="text-lg font-bold text-brand-dark">{invitePreviewData.pharmacy_name}</p>
+          <p className="text-xs text-brand">
+            দায়িত্ব: <span className="font-semibold">{roleBn(invitePreviewData.role)}</span>
+          </p>
+          <p className="text-[11px] text-gray-500">
+            দায়িত্বটি আমন্ত্রণ কোড থেকেই আসে — আপনি বদলাতে পারবেন না।
+          </p>
+
+          {signedIn ? (
+            <button
+              type="button"
+              className="btn-primary mt-2 w-full"
+              disabled={busy}
+              onClick={handleRedeemInvite}
+            >
+              {busy ? L.common.loading : `${invitePreviewData.pharmacy_name}-এ যোগ দিন`}
+            </button>
+          ) : (
+            <>
+              <p className="mt-2 text-xs text-gray-600">
+                যোগ দিতে আগে নিজের একাউন্টে লগইন করুন, বা নতুন একাউন্ট খুলুন।
+                কোডটি এখানেই থাকবে।
+              </p>
+              <button
+                type="button"
+                className="btn-primary mt-2 w-full"
+                onClick={() => { setCloudTab('signin'); setError(''); }}
+              >
+                লগইন করে আমন্ত্রণ গ্রহণ করুন
+              </button>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
   // যদি Supabase কনফিগার করা থাকে এবং ব্যবহারকারী লগইন না থাকেন, তখন Cloud Auth কার্ড দেখানো হবে
   const showCloudAuth = isConfigured && !user;
 
@@ -216,12 +324,24 @@ export default function LoginPage() {
           <h1 className="text-2xl font-bold text-brand-dark">{L.appName}</h1>
           <p className="text-sm text-gray-500">{L.appNameBn}</p>
           <p className="text-gray-500">{L.tagline}</p>
-          {!isConfigured && (
+          {!isConfigured && !configError && (
             <span className="mt-2 inline-block rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-600">
               অফলাইন লোকাল মোড
             </span>
           )}
         </div>
+
+        {/* ভাঙা deploy — নিঃশব্দে চলতে দেওয়া যায় না */}
+        {configError && (
+          <div className="mb-4 rounded-lg border-2 border-danger bg-danger/10 px-4 py-3 text-danger">
+            <p className="text-sm font-bold">সার্ভার সেটিংস ভুল — ক্লাউড বন্ধ রাখা হয়েছে</p>
+            <p className="mt-1 break-words text-xs">{configError}</p>
+            <p className="mt-1 text-xs text-gray-600">
+              এই ডিভাইসে অফলাইন কাজ চলবে, কিন্তু কিছুই সার্ভারে যাবে না।
+              যিনি অ্যাপটি বসিয়েছেন তাঁকে দেখান।
+            </p>
+          </div>
+        )}
 
         {/* Cloud Authentication Tabs */}
         {showCloudAuth && (
@@ -361,47 +481,8 @@ export default function LoginPage() {
               </form>
             )}
 
-            {/* ৩. আমন্ত্রণ কোড প্রিভিউ ও যোগদান */}
-            {cloudTab === 'invite' && (
-              <div className="space-y-3">
-                <form onSubmit={handlePreviewInvite} className="space-y-2">
-                  <label className="label" htmlFor="invite-code">আমন্ত্রণ কোড দিন</label>
-                  <div className="flex gap-2">
-                    <input
-                      id="invite-code"
-                      type="text"
-                      className="input uppercase font-mono tracking-wider"
-                      value={inviteCode}
-                      onChange={(e) => setInviteCode(e.target.value)}
-                      placeholder="INVITE-A-..."
-                      required
-                    />
-                    <button type="submit" className="btn-outline px-4 shrink-0" disabled={previewLoading}>
-                      {previewLoading ? '...' : 'যাচাই'}
-                    </button>
-                  </div>
-                </form>
-
-                {invitePreviewData && (
-                  <div className="rounded-xl border border-brand/30 bg-brand-light/50 p-4 text-center space-y-2">
-                    <p className="text-xs text-gray-500">আমন্ত্রণ পাওয়া গেছে:</p>
-                    <p className="text-lg font-bold text-brand-dark">{invitePreviewData.pharmacy_name}</p>
-                    <p className="text-xs text-brand">দায়িত্ব: <span className="font-semibold">{invitePreviewData.role}</span></p>
-
-                    <p className="text-xs text-gray-600 mt-2">
-                      এই দোকানে যোগ দিতে প্রথমে আপনার একাউন্টে লগইন করুন বা সাইন আপ করুন।
-                    </p>
-                    <button
-                      type="button"
-                      className="btn-primary w-full mt-2"
-                      onClick={() => setCloudTab('signin')}
-                    >
-                      লগইন করে আমন্ত্রণ গ্রহণ করুন
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
+            {/* ৩. আমন্ত্রণ কোড যাচাই (যোগ দেওয়া লগইনের পরে) */}
+            {cloudTab === 'invite' && invitePanel(false)}
           </div>
         )}
 
@@ -424,6 +505,26 @@ export default function LoginPage() {
                 >
                   লগআউট
                 </button>
+              </div>
+            )}
+
+            {/* যোগদানের জায়গা। লগইনের পরে ক্লাউড ট্যাবগুলো লুকিয়ে যায়, তাই
+                আমন্ত্রণ গ্রহণের একমাত্র পথ এটিই। অন্য দোকানে যোগ দিতেও কাজে লাগে। */}
+            {user && isConfigured && (
+              <div className="mb-4 space-y-2 rounded-xl border border-gray-200 p-3">
+                <p className="text-xs font-semibold text-gray-600">আমন্ত্রণ কোড দিয়ে দোকানে যোগ দিন</p>
+                {invitePanel(true)}
+                {joinMsg && (
+                  <p
+                    className={`rounded-lg px-3 py-2 text-sm ${
+                      joinMsg.kind === 'ok'
+                        ? 'bg-brand-light text-brand-dark'
+                        : 'bg-danger/10 text-danger'
+                    }`}
+                  >
+                    {joinMsg.text}
+                  </p>
+                )}
               </div>
             )}
 

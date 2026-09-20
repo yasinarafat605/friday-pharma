@@ -10,7 +10,8 @@ import { backupStatus } from '@/lib/business-rules';
 import { verifyStockIntegrity, type IntegrityReport } from '@/lib/stock/movements';
 import { toBanglaDigits } from '@/lib/money';
 import { L } from '@/lib/i18n/labels';
-import type { AppSettings, ExpenseCategory } from '@/types/db';
+import { useAuth } from '@/lib/supabase/AuthContext';
+import type { AppSettings, ExpenseCategory, MemberRole } from '@/types/db';
 
 export default function SettingsPage() {
   const [s, setS] = useState<AppSettings | null>(null);
@@ -92,6 +93,115 @@ export default function SettingsPage() {
 
       <CategoryManager onError={setErr} onMsg={setMsg} />
       <StockIntegrity onError={setErr} />
+      <ShopMembership />
+    </div>
+  );
+}
+
+const ROLE_BN: Record<MemberRole, string> = {
+  owner: 'মালিক',
+  manager: 'ম্যানেজার',
+  cashier: 'ক্যাশিয়ার',
+  inventory: 'স্টক কর্মী',
+  accountant: 'হিসাবরক্ষক',
+};
+
+/**
+ * দোকান ও সদস্যপদ।
+ *
+ * সদস্যপদ ত্যাগ এখানে রাখা হয়েছে, হেডারে নয়। কারণ এটি বিরল ও ফিরে না-আসা কাজ:
+ * হেডারের দোকান-বদল ড্রপডাউনের পাশে এমন বাটন থাকলে ভুল চাপ পড়া নিশ্চিত।
+ * সেটিংস পাতাতেই ইতিমধ্যে PIN বদল আর স্টকের হিসাবের মতো একবারের কাজগুলো আছে।
+ *
+ * R7 — দোকানের শেষ মালিক বেরোতে পারেন না; বাধাটি ডেটাবেসে, আর তার বার্তাই
+ * এখানে হুবহু দেখানো হয়।
+ */
+function ShopMembership() {
+  const { user, isConfigured, memberships, activePharmacyId, leaveShop } = useAuth();
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [err, setErr] = useState('');
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+
+  // অফলাইন মোডে কোনো সদস্যপদই নেই — কার্ডটি দেখানোর দরকার নেই।
+  if (!isConfigured || !user) return null;
+
+  async function leave(pharmacyId: string, name: string) {
+    setMsg(''); setErr(''); setBusy(true);
+    try {
+      await leaveShop(pharmacyId);
+      setMsg(`${name} থেকে আপনার সদস্যপদ বাদ দেওয়া হয়েছে।`);
+      setConfirmId(null);
+    } catch (e) {
+      // 'দোকানের শেষ মালিক সদস্যপদ ত্যাগ করতে পারবেন না' — R7-এর বার্তা।
+      setErr(e instanceof Error ? e.message : 'সদস্যপদ ত্যাগ ব্যর্থ হয়েছে');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card space-y-3">
+      <h2 className="font-bold text-brand-dark">দোকান ও সদস্যপদ</h2>
+      <p className="text-sm text-gray-600">{user.email}</p>
+
+      {memberships.length === 0 && (
+        <p className="text-sm text-gray-500">কোনো দোকানে সদস্যপদ নেই।</p>
+      )}
+
+      <ul className="space-y-2">
+        {memberships.map((m) => {
+          const name = m.pharmacies?.name || m.pharmacy_id.slice(0, 8);
+          const isActive = m.pharmacy_id === activePharmacyId;
+          return (
+            <li key={m.pharmacy_id} className="rounded-xl border border-gray-200 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="font-semibold text-ink">
+                    {name}
+                    {isActive && <span className="ml-2 badge badge-normal">চালু</span>}
+                  </p>
+                  <p className="text-xs text-gray-500">দায়িত্ব: {ROLE_BN[m.role] ?? m.role}</p>
+                </div>
+
+                {confirmId === m.pharmacy_id ? (
+                  <div className="flex gap-2">
+                    <button
+                      className="rounded-lg border border-danger px-3 py-1 text-sm font-semibold text-danger"
+                      disabled={busy}
+                      onClick={() => leave(m.pharmacy_id, name)}
+                    >
+                      {busy ? '...' : 'নিশ্চিত, বাদ দিন'}
+                    </button>
+                    <button
+                      className="rounded-lg border border-gray-300 px-3 py-1 text-sm"
+                      disabled={busy}
+                      onClick={() => setConfirmId(null)}
+                    >
+                      থাক
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    className="rounded-lg border border-danger px-3 py-1 text-sm font-semibold text-danger"
+                    onClick={() => { setConfirmId(m.pharmacy_id); setErr(''); setMsg(''); }}
+                  >
+                    সদস্যপদ ত্যাগ
+                  </button>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+
+      <p className="text-xs text-gray-500">
+        সদস্যপদ ত্যাগ করলে এই দোকানের তথ্য আর দেখা যাবে না। দোকানের একমাত্র মালিক
+        হলে ত্যাগ করা যাবে না — আগে অন্য কাউকে মালিক বানাতে হবে।
+      </p>
+
+      {msg && <p className="rounded bg-success/10 px-3 py-2 text-sm text-success">{msg}</p>}
+      {err && <p className="rounded bg-danger/10 px-3 py-2 text-sm text-danger">{err}</p>}
     </div>
   );
 }

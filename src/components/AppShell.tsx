@@ -59,7 +59,9 @@ function normalizePath(p: string | null): string {
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = normalizePath(usePathname());
   const router = useRouter();
-  const { user, activePharmacyId, activeRole, memberships, selectPharmacy, signOut } = useAuth();
+  const {
+    user, activePharmacyId, activeRole, memberships, selectPharmacy, signOut, configError,
+  } = useAuth();
 
   const [ready, setReady] = useState(false);
   const [locked, setLocked] = useState(false);
@@ -193,6 +195,17 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         </nav>
 
         <main className="flex-1 p-4 pb-24 md:pb-4">
+          {/* ভাঙা deploy — ভেতরের প্রতিটি পর্দাতেই দেখা যাবে */}
+          {configError && (
+            <div className="mb-4 rounded-xl2 border-2 border-danger bg-danger/10 px-4 py-3">
+              <p className="text-sm font-bold text-danger">সার্ভার সেটিংস ভুল — ক্লাউড বন্ধ রাখা হয়েছে</p>
+              <p className="mt-1 break-words text-xs text-danger">{configError}</p>
+              <p className="mt-1 text-xs text-gray-600">
+                অফলাইন কাজ চলবে, কিন্তু কিছুই সার্ভারে যাবে না। যিনি অ্যাপটি বসিয়েছেন তাঁকে দেখান।
+              </p>
+            </div>
+          )}
+
           {backup?.overdue && !backupHidden && pathname !== '/backup' && (
             <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl2 border-2 border-alert/40 bg-alert/10 px-4 py-3">
               <span className="text-2xl">💾</span>

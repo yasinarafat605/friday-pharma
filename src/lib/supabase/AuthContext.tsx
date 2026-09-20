@@ -2,8 +2,11 @@
 
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import type { User, Session } from '@supabase/supabase-js';
-import { getSupabaseClient, isSupabaseConfigured, getActivePharmacyId, setActivePharmacyId } from './client';
-import { fetchUserMemberships, signOutUser } from './auth';
+import { getSupabaseClient, readSupabaseConfig, getActivePharmacyId } from './client';
+import {
+  fetchUserMemberships, signOutUser, switchActivePharmacy, leavePharmacy,
+  resolveActivePharmacyId,
+} from './auth';
 import type { MemberRole, Membership } from '@/types/db';
 
 interface AuthContextType {
@@ -11,12 +14,16 @@ interface AuthContextType {
   session: Session | null;
   loading: boolean;
   isConfigured: boolean;
+  /** ভাঙা deploy-এর বার্তা। ঠিক থাকলে বা অফলাইন হলে null। */
+  configError: string | null;
   activePharmacyId: string | null;
   activePharmacyName: string;
   activeRole: MemberRole | null;
   memberships: Membership[];
   selectPharmacy: (pharmacyId: string) => void;
   refreshMemberships: () => Promise<void>;
+  /** সদস্যপদ ত্যাগ। শেষ মালিক হলে ডেটাবেসই আটকায় (R7) — বার্তাটি উপরে যায়। */
+  leaveShop: (pharmacyId: string) => Promise<void>;
   signOut: () => Promise<void>;
 }
 
@@ -25,12 +32,14 @@ const AuthContext = createContext<AuthContextType>({
   session: null,
   loading: true,
   isConfigured: false,
+  configError: null,
   activePharmacyId: null,
   activePharmacyName: '',
   activeRole: null,
   memberships: [],
   selectPharmacy: () => {},
   refreshMemberships: async () => {},
+  leaveShop: async () => {},
   signOut: async () => {},
 });
 
@@ -41,7 +50,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [memberships, setMemberships] = useState<Membership[]>([]);
   const [activePharmacyId, setActiveId] = useState<string | null>(null);
 
-  const configured = isSupabaseConfigured();
+  const cfg = readSupabaseConfig();
+  const configured = cfg.status === 'ok';
+  const configError = cfg.status === 'invalid'
+    ? `Supabase কনফিগারেশন ভুল — ${cfg.problems.join('; ')}`
+    : null;
+
+  // ভাঙা deploy নিঃশব্দে চলতে দেওয়া যায় না — console-এও একবার জোরে বলা হয়।
+  useEffect(() => {
+    if (configError) console.error(configError);
+  }, [configError]);
 
   const loadUserState = useCallback(async () => {
     if (!configured) {
@@ -59,14 +77,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const list = await fetchUserMemberships();
         setMemberships(list);
 
-        let currentActive = getActivePharmacyId();
-        const valid = list.some((m) => m.pharmacy_id === currentActive);
-        if (!valid) {
-          const def = list.find((m) => m.is_default);
-          currentActive = def ? def.pharmacy_id : (list[0]?.pharmacy_id ?? null);
-          setActivePharmacyId(currentActive);
-        }
-        setActiveId(currentActive);
+        const stored = getActivePharmacyId();
+        const resolved = resolveActivePharmacyId(list, stored);
+        if (resolved !== stored) switchActivePharmacy(resolved);
+        setActiveId(resolved);
       } else {
         setMemberships([]);
         setActiveId(null);
@@ -91,7 +105,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         } else {
           setMemberships([]);
           setActiveId(null);
-          setActivePharmacyId(null);
+          switchActivePharmacy(null);
         }
       });
       return () => subscription.unsubscribe();
@@ -99,7 +113,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [configured, loadUserState]);
 
   const selectPharmacy = useCallback((pharmacyId: string) => {
-    setActivePharmacyId(pharmacyId);
+    switchActivePharmacy(pharmacyId);
     setActiveId(pharmacyId);
   }, []);
 
@@ -107,7 +121,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!user) return;
     const list = await fetchUserMemberships();
     setMemberships(list);
+
+    // তালিকা বদলালে সক্রিয় দোকানও বদলাতে পারে — যেমন সদস্যপদ ত্যাগের পরে।
+    const stored = getActivePharmacyId();
+    const resolved = resolveActivePharmacyId(list, stored);
+    if (resolved !== stored) switchActivePharmacy(resolved);
+    setActiveId(resolved);
   }, [user]);
+
+  // সদস্যপদ ত্যাগ। R7 শেষ মালিককে আটকায়; সেই ত্রুটি গিলে ফেলা হয় না।
+  const leaveShop = useCallback(async (pharmacyId: string) => {
+    await leavePharmacy(pharmacyId);
+    const list = await fetchUserMemberships();
+    setMemberships(list);
+    const resolved = resolveActivePharmacyId(list, getActivePharmacyId());
+    switchActivePharmacy(resolved);
+    setActiveId(resolved);
+  }, []);
 
   const signOut = useCallback(async () => {
     await signOutUser();
@@ -128,12 +158,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         session,
         loading,
         isConfigured: configured,
+        configError,
         activePharmacyId,
         activePharmacyName,
         activeRole,
         memberships,
         selectPharmacy,
         refreshMemberships,
+        leaveShop,
         signOut,
       }}
     >
