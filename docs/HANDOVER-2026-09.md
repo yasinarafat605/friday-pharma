@@ -13,10 +13,12 @@ UI, money as integer paisa), shipped as a Next.js 14 static export — PWA plus 
 Capacitor 6 Android APK from one codebase. All data lives locally in IndexedDB
 via Dexie 4 (database `asshifa_local`, schema v4).
 
-It is being converted into a multi-pharmacy SaaS. The PostgreSQL/Supabase side
-exists as SQL files only. **No Supabase project has ever been created, and there
-is no Supabase client anywhere in `src/` — not even as a dependency.** The
-running app is still 100% local.
+It is being converted into a multi-pharmacy SaaS. **No Supabase project has ever
+been created** — the SQL has still never been applied anywhere. But `src/` is no
+longer Supabase-free: `@supabase/supabase-js` is a dependency (`package.json`),
+and the client lives in `src/lib/supabase/` (`client.ts`, `auth.ts`,
+`AuthContext.tsx`) as of P4. The app still runs 100% locally when the two
+`NEXT_PUBLIC_SUPABASE_*` variables are unset, which is the supported default.
 
 ---
 
@@ -34,21 +36,28 @@ running app is still 100% local.
 Supporting commits: `a3669b6` (P2 invariants spec), `b379caf` (P2 docs + P3
 plan), `c2de1dd` (original handoff note), `ff172eb` (rebrand + tenant fields).
 
-### P4 — Authentication: NOT STARTED
+### P4 — Authentication: DONE (P4 server + client, P4b app wiring)
 
-Nothing exists. Per `docs/PHASE-HANDOFF.md` → *Next Starting Point*, it must
-cover:
+Delivered, not planned. Each row below is implemented; see `docs/TESTING-P4B.md`
+for how to exercise it by hand.
 
-| Must do | Why |
+| Must do | Where it landed |
 |---|---|
-| Wire Supabase Auth (no client exists yet) | `src/` has zero Supabase code today |
+| Wire Supabase Auth | `src/lib/supabase/client.ts`, `auth.ts`, `AuthContext.tsx` |
 | Sign-up: create pharmacy **then** bootstrap owner membership, in that order | The membership insert depends on `pharmacies.created_by` from step one |
 | Sign-in: pick an active pharmacy for multi-membership users and send it as the claim `auth_pharmacy_id()` reads (request header or JWT claim) | The resolver already validates whatever arrives; it returns null on an unmatched claim |
 | Joining a shop calls `redeem_invite(code)` — never a direct membership insert | The role comes from the invite, not the joiner |
-| Keep the 8-digit PIN as a screen lock, not the account key | Existing local behaviour |
+| Keep the 8-digit PIN as a screen lock, not the account key | Unchanged; `src/lib/auth.ts` only gained SSR guards |
 
-Also unstarted: the sync engine (push/pull), the pharmacy switcher, any
-permission admin UI, and paid plans.
+P4b additionally closed the app-side gaps P4 left: the invite journey is now
+reachable end to end (preview → sign in → confirm → active pharmacy), the
+pharmacy switcher in `AppShell` routes through `switchActivePharmacy()`,
+`leavePharmacy()` is wired to a Settings card, and a misconfigured deploy now
+fails loudly instead of building a client against a dummy URL and key.
+
+Still unstarted: the sync engine (push/pull), an in-app screen for *creating*
+invite codes (they must be inserted by hand for now), any permission admin UI,
+and paid plans.
 
 ---
 
@@ -89,6 +98,10 @@ Severity: **C**ritical / **H**igh / **M**edium / **L**ow.
 | R14 | **Sync engine cannot `select *`** on `sale_items` / `batches` / `stock_entries` | H | Sync engine design |
 | R15 | `v_*_costs` views carry their own tenant predicate; no RLS behind them | **C if broken** | Any edit to those views |
 | R16 | A missing seed now breaks reads too — health checks must not query a business table | L | Health-check design |
+| R17 | No in-app screen creates invite codes. A shop owner cannot invite anyone without someone inserting a row into `invites` by hand in the SQL editor. `redeem_invite()` and `invite_preview()` both work; only the issuing end is missing | H | Any real employee onboarding |
+| R18 | The role→Bangla label map is duplicated three times: `getRoleBadge()` in `AppShell.tsx`, `ROLE_BN` in `login/page.tsx`, `ROLE_BN` in `settings/page.tsx`. A sixth role, or a wording change, must be made in three files | L | Nothing now; a silent inconsistency later |
+| R19 | `isSupabaseConfigured returns a boolean` in `auth-p4.test.ts` still asserts only the return *type*, which a `!!(...)` expression can never violate. Kept because P4b was told not to delete existing tests; it should be replaced, not removed | L | False confidence in the suite count |
+| R20 | The offline PIN path could not be verified in a browser. Under headless Chrome with `--virtual-time-budget`, `ensureSeeded()` never resolves and the login page stays on "লোড হচ্ছে…", so only the pre-seed render was confirmed. Needs one manual pass in a real browser, per `docs/TESTING-P4B.md` ভাগ ১ | M | Confidence in the offline first-run journey |
 
 ### ⚠ Where these are actually recorded — discrepancies found
 
@@ -166,14 +179,14 @@ Last verified 2026-09-20 against the 2026-09-04 SQL, including `05-auth.sql`:
 | # | Command | Expected | Notes |
 |---|---|---|---|
 | 1 | `npx tsc --noEmit` | exit 0, **no output** | `strict: true`; no `noUnusedLocals` |
-| 2 | `npx vitest run` | **7 files, 104 passed, 0 failed** | pure logic only |
+| 2 | `npx vitest run` | **8 files, 128 passed, 0 failed** | pure logic only |
 | 3 | `bash supabase/run-isolation-test.sh` | **133 passed, 0 failed** | needs real PostgreSQL |
 
 Per-file test counts (a change here without a matching commit is suspicious):
 
 ```
 stock-reconstruct 33   sync-stamp 17   scan-parse 21   business-rules 11
-dates 9   backup-status 8   money 5                        total 104
+dates 9   backup-status 8   money 5   auth-p4 24            total 128
 ```
 
 Isolation suite groups — expected pass counts:
@@ -205,7 +218,10 @@ throwaway copy if you need a build check. There is **no lint gate** (F8).
 
 ---
 
-## 6. `git status` right now
+## 6. `git status`
+
+The snapshot below was taken on 2026-09-03 at `8da3e98`, before P4 and P4b
+existed:
 
 ```
 $ git rev-parse --abbrev-ref HEAD
@@ -216,7 +232,11 @@ $ git status --porcelain
 $
 ```
 
-**Working tree is clean.** No modified, staged, or untracked files.
+**That snapshot is historical, not current.** It was already wrong by
+2026-09-04, when the P4 work was written and left uncommitted for sixteen days.
+P4 is committed as of `5b85a77`, and P4b on top of it; `master` now tracks
+`origin/master` on GitHub. Do not trust this block — run `git status` and
+`git log --oneline -5` yourself, which is the only current answer.
 
 One thing exists on disk but is deliberately ignored:
 
