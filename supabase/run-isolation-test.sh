@@ -50,11 +50,11 @@ grant execute on all functions in schema public to authenticated;
 grant execute on all functions in schema auth to authenticated;
 SQL
 
-# সবার শেষে — টেবিল-স্তরের grant কলামের revoke মুছে দেয়, তাই এটিই ক্রম
-run "$HERE/04-column-security.sql"
-
 # পর্ব ৪: প্রমাণীকরণ ও RBAC দৃঢ়করণ (R7, R10, R11)
 run "$HERE/05-auth.sql"
+
+# সবার শেষে — টেবিল-স্তরের grant কলামের revoke মুছে দেয়, তাই এটিই ক্রম
+run "$HERE/04-column-security.sql"
 
 status=0
 psql -v ON_ERROR_STOP=1 -d "$TESTDB" -f "$HERE/test-isolation.sql" || status=$?
