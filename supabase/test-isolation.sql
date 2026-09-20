@@ -633,6 +633,125 @@ select t_count('১০ R8', 'ফিরিয়ে দেওয়ার পর 
   'select count(*) from customers', 1);
 
 -- ============================================================
+-- ১১। R7 — শেষ মালিকের প্রস্থান প্রতিরোধ (Last-Owner Orphaning)
+-- ============================================================
+
+-- ১. UA ফার্মেসি A-র একমাত্র মালিক। তিনি নিজে বের হতে গেলে আটকাবে।
+set role authenticated;
+set app.uid = '11111111-1111-1111-1111-111111111111';
+select t_raises('১১ R7', 'একমাত্র মালিক সদস্যপদ মুছতে পারেন না',
+  $$delete from memberships where user_id = '11111111-1111-1111-1111-111111111111' and pharmacy_id = 'aaaaaaaa-0000-0000-0000-0000000000a1'$$,
+  'শেষ মালিক সদস্যপদ ত্যাগ করতে পারবেন না');
+
+-- ২. নন-মালিক (ক্যাশিয়ার UC) নিজে বেরিয়ে যেতে পারেন।
+set app.uid = '44444444-4444-4444-4444-444444444444';
+select t_allowed('১১ R7', 'ক্যাশিয়ার নিজে বেরিয়ে যেতে পারেন',
+  $$delete from memberships where user_id = '44444444-4444-4444-4444-444444444444' and pharmacy_id = 'aaaaaaaa-0000-0000-0000-0000000000a1'$$);
+
+-- ৩. একাধিক মালিক থাকলে একজন প্রস্থান করতে পারেন।
+reset role;
+reset app.uid;
+-- UX-কে দ্বিতীয় মালিক হিসেবে যোগ করা
+insert into memberships (user_id, pharmacy_id, role, is_default)
+values ('99999999-9999-9999-9999-999999999999', 'aaaaaaaa-0000-0000-0000-0000000000a1', 'owner', false);
+
+set role authenticated;
+set app.uid = '99999999-9999-9999-9999-999999999999';
+select t_allowed('১১ R7', 'দুইজন মালিকের একজন প্রস্থান করতে পারেন',
+  $$delete from memberships where user_id = '99999999-9999-9999-9999-999999999999' and pharmacy_id = 'aaaaaaaa-0000-0000-0000-0000000000a1'$$);
+
+-- ৪. এখন আবার UA একমাত্র মালিক, তাই তিনি বের হতে পারবেন না।
+set app.uid = '11111111-1111-1111-1111-111111111111';
+select t_raises('১১ R7', 'আবার একমাত্র মালিক হওয়ার পর প্রস্থান নিষিদ্ধ',
+  $$delete from memberships where user_id = '11111111-1111-1111-1111-111111111111' and pharmacy_id = 'aaaaaaaa-0000-0000-0000-0000000000a1'$$,
+  'শেষ মালিক সদস্যপদ ত্যাগ করতে পারবেন না');
+
+-- UC-কে আবার ফিরিয়ে আনা পরবর্তী পরীক্ষার সুবিধার্থে
+reset role;
+reset app.uid;
+insert into memberships (user_id, pharmacy_id, role, is_default)
+values ('44444444-4444-4444-4444-444444444444', 'aaaaaaaa-0000-0000-0000-0000000000a1', 'cashier', false);
+
+
+-- ============================================================
+-- ১২। R10 — invite_preview Throttling / Rate-Limiting
+-- ============================================================
+
+set role authenticated;
+set app.client_id = 'test-client-throttle';
+
+-- ১ থেকে ৫: ভুল কোডে ০ সারি ফেরে এবং চেষ্টা গোনা হয়
+select t_count('১২ R10', 'ভুল কোড ১: ০ সারি', $$select count(*) from invite_preview('BAD-1')$$, 0);
+select t_count('১২ R10', 'ভুল কোড ২: ০ সারি', $$select count(*) from invite_preview('BAD-2')$$, 0);
+select t_count('১২ R10', 'ভুল কোড ৩: ০ সারি', $$select count(*) from invite_preview('BAD-3')$$, 0);
+select t_count('১২ R10', 'ভুল কোড ৪: ০ সারি', $$select count(*) from invite_preview('BAD-4')$$, 0);
+select t_count('১২ R10', 'ভুল কোড ৫: ০ সারি', $$select count(*) from invite_preview('BAD-5')$$, 0);
+
+-- ৬ষ্ঠ চেষ্টা: অতিরিক্ত ভুল চেষ্টার কারণে exception ওঠে
+select t_raises('১২ R10', '৬ষ্ঠ ভুল চেষ্টার পর কোড যাচাই সাময়িক স্থগিত',
+  $$select count(*) from invite_preview('BAD-6')$$, 'অতিরিক্ত ভুল কোড চেষ্টা করা হয়েছে');
+
+-- অন্য কোনো ক্লায়েন্ট আইডেন্টিফায়ার হলে এখনো বৈধ কোড প্রিভিউ করতে পারে
+set app.client_id = 'test-client-clean';
+select t_count('১২ R10', 'অন্য আইপি/ক্লায়েন্ট এখনো বৈধ কোড প্রিভিউ করতে পারে',
+  $$select count(*) from invite_preview('INVITE-A-7f3c9d2e')$$, 1);
+
+reset app.client_id;
+
+
+-- ============================================================
+-- ১৩। R11 — নিশ্চিত ডিফল্ট ফার্মেসি (Guaranteed Default Pharmacy)
+-- ============================================================
+
+reset role;
+reset app.uid;
+-- নতুন ব্যবহারকারী U8 যোগ করা
+insert into auth.users (id) values ('88888888-8888-8888-8888-888888888888');
+
+-- ১. প্রথম সদস্যপদ স্বয়ংক্রিয়ভাবে is_default = true পায়
+insert into memberships (user_id, pharmacy_id, role)
+values ('88888888-8888-8888-8888-888888888888', 'aaaaaaaa-0000-0000-0000-0000000000a1', 'cashier');
+
+select t_value('১৩ R11', 'প্রথম সদস্যপদ স্বয়ংক্রিয়ভাবে ডিফল্ট হয়',
+  $$select is_default::text from memberships where user_id = '88888888-8888-8888-8888-888888888888'$$, 'true');
+
+-- ২. দ্বিতীয় সদস্যপদ যোগ করলে তা false হয়
+insert into memberships (user_id, pharmacy_id, role)
+values ('88888888-8888-8888-8888-888888888888', 'bbbbbbbb-0000-0000-0000-0000000000b1', 'cashier');
+
+select t_value('১৩ R11', 'দ্বিতীয় সদস্যপদ মিথ্যা হিসেবে যোগ হয়',
+  $$select is_default::text from memberships where user_id = '88888888-8888-8888-8888-888888888888' and pharmacy_id = 'bbbbbbbb-0000-0000-0000-0000000000b1'$$, 'false');
+
+-- ৩. কোনো দাবি ছাড়া auth_pharmacy_id() সরাসরি ডিফল্টটিতে পৌঁছায় (নিঃশব্দে null হয় না)
+set role authenticated;
+set app.uid = '88888888-8888-8888-8888-888888888888';
+reset app.active_pharmacy;
+
+select t_value('১৩ R11', 'একাধিক দোকানেও দাবি ছাড়া সক্রিয় দোকান ডিফল্টটিতে পৌঁছায়',
+  $$select auth_pharmacy_id()::text$$, 'aaaaaaaa-0000-0000-0000-0000000000a1');
+
+-- ৪. ডিফল্ট দোকানটি মুছে ফেললে অবশিষ্ট দোকানটি স্বয়ংক্রিয়ভাবে ডিফল্ট হয়ে যায়
+reset role;
+reset app.uid;
+delete from memberships
+ where user_id = '88888888-8888-8888-8888-888888888888'
+   and pharmacy_id = 'aaaaaaaa-0000-0000-0000-0000000000a1';
+
+select t_value('১৩ R11', 'ডিফল্ট দোকান মুছলে অবশিষ্ট দোকান ডিফল্ট হয়',
+  $$select is_default::text from memberships where user_id = '88888888-8888-8888-8888-888888888888'$$, 'true');
+
+-- ৫. এখন auth_pharmacy_id() নতুন ডিফল্টটিতে যায়
+set role authenticated;
+set app.uid = '88888888-8888-8888-8888-888888888888';
+select t_value('১৩ R11', 'এখন auth_pharmacy_id নতুন ডিফল্ট ফেরে',
+  $$select auth_pharmacy_id()::text$$, 'bbbbbbbb-0000-0000-0000-0000000000b1');
+
+-- ৬. ভুয়া দাবি পাঠালে ডিফল্টে গড়ায় না — null ফেরে (দাবি কখনোই অন্ধভাবে বিশ্বাস হয় না)
+set app.active_pharmacy = 'cccccccc-0000-0000-0000-0000000000c1';
+select t_value('১৩ R11', 'সদস্যপদহীন দাবি পাঠালে ডিফল্টে গড়ায় না, null ফেরে',
+  $$select coalesce(auth_pharmacy_id()::text, '<null>')$$, '<null>');
+
+-- ============================================================
 -- ফলাফল
 -- ============================================================
 

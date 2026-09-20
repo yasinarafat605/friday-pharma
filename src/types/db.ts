@@ -310,3 +310,51 @@ export interface StockRow {
   stock_status: 'out' | 'low' | 'normal';
   expiry_status: string | null;
 }
+
+// ---- সদস্যপদ ও ভূমিকা (RBAC) ----
+export type MemberRole = 'owner' | 'manager' | 'cashier' | 'inventory' | 'accountant';
+
+export interface Pharmacy {
+  id: string;
+  name: string;
+  created_by: string;
+  is_active?: boolean;
+  plan?: 'trial' | 'pro' | 'enterprise';
+  trial_ends_at?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface Membership {
+  user_id: string;
+  pharmacy_id: string;
+  role: MemberRole;
+  is_default: boolean;
+  full_name?: string | null;
+  phone?: string | null;
+  joined_at?: string;
+  updated_at?: string;
+  pharmacies?: {
+    id: string;
+    name: string;
+    created_by?: string;
+  };
+}
+
+export interface Invite {
+  code: string;
+  pharmacy_id: string;
+  role: MemberRole;
+  created_by?: string;
+  created_at?: string;
+  expires_at?: string;
+  used_by?: string | null;
+  used_at?: string | null;
+}
+
+export interface InvitePreview {
+  pharmacy_id: string;
+  pharmacy_name: string;
+  role: MemberRole;
+}
+

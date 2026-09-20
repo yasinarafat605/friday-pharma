@@ -81,9 +81,11 @@ export async function verifyPin(pin: string): Promise<boolean> {
 
 // ---- session lock ----
 export function unlock(): void {
+  if (typeof sessionStorage === 'undefined') return;
   sessionStorage.setItem(UNLOCK_KEY, '1');
 }
 export function lock(): void {
+  if (typeof sessionStorage === 'undefined') return;
   sessionStorage.removeItem(UNLOCK_KEY);
 }
 export function isUnlocked(): boolean {

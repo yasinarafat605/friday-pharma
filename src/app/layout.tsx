@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import { Noto_Sans_Bengali } from 'next/font/google';
 import './globals.css';
 import PWARegister from '@/components/PWARegister';
+import { AuthProvider } from '@/lib/supabase/AuthContext';
 
 const bangla = Noto_Sans_Bengali({
   subsets: ['bengali'],
@@ -39,7 +40,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="bn" className={bangla.variable}>
       <body className="min-h-screen font-bangla antialiased">
         <PWARegister />
-        {children}
+        <AuthProvider>{children}</AuthProvider>
       </body>
     </html>
   );
