@@ -75,6 +75,9 @@ Severity: **C**ritical / **H**igh / **M**edium / **L**ow.
 | F5 | Invite codes readable across every tenant; anyone could enumerate and join | M | P3 `36fa13f` | Any live deployment |
 | R8 | Missing permission seed made the app silently read-only, no diagnostic | H | P3a `8da3e98` | Ops / deploys |
 | R9 | Cost columns readable by roles denied `reports.read` (margin leak) | H | P3a `8da3e98` | Staff-facing release |
+| R17 | No in-app screen created invite codes; onboarding needed a hand-written SQL insert | H | P4c | Any real employee onboarding |
+| R18 | Role→Bangla label map duplicated in three files | L | P4c | Nothing; a silent inconsistency later |
+| R19 | A test asserted only a return type, buying false confidence | L | P4c | Trust in the suite count |
 
 ### Open
 
@@ -98,10 +101,8 @@ Severity: **C**ritical / **H**igh / **M**edium / **L**ow.
 | R14 | **Sync engine cannot `select *`** on `sale_items` / `batches` / `stock_entries` | H | Sync engine design |
 | R15 | `v_*_costs` views carry their own tenant predicate; no RLS behind them | **C if broken** | Any edit to those views |
 | R16 | A missing seed now breaks reads too — health checks must not query a business table | L | Health-check design |
-| R17 | No in-app screen creates invite codes. A shop owner cannot invite anyone without someone inserting a row into `invites` by hand in the SQL editor. `redeem_invite()` and `invite_preview()` both work; only the issuing end is missing | H | Any real employee onboarding |
-| R18 | The role→Bangla label map is duplicated three times: `getRoleBadge()` in `AppShell.tsx`, `ROLE_BN` in `login/page.tsx`, `ROLE_BN` in `settings/page.tsx`. A sixth role, or a wording change, must be made in three files | L | Nothing now; a silent inconsistency later |
-| R19 | `isSupabaseConfigured returns a boolean` in `auth-p4.test.ts` still asserts only the return *type*, which a `!!(...)` expression can never violate. Kept because P4b was told not to delete existing tests; it should be replaced, not removed | L | False confidence in the suite count |
 | R20 | The offline PIN path could not be verified in a browser. Under headless Chrome with `--virtual-time-budget`, `ensureSeeded()` never resolves and the login page stays on "লোড হচ্ছে…", so only the pre-seed render was confirmed. Needs one manual pass in a real browser, per `docs/TESTING-P4B.md` ভাগ ১ | M | Confidence in the offline first-run journey |
+| R21 | Invite codes are uppercase from a 32-character alphabet, but `invite_preview()` and `redeem_invite()` match `code = p_code` exactly, and the app normalises typed input with `trim()` only. Someone retyping a code in lowercase fails and burns one of R10's five attempts. The copy button is the intended path; a case-insensitive lookup would be an SQL change, which P4c was forbidden | M | Owners who dictate codes by phone rather than copying them |
 
 ### ⚠ Where these are actually recorded — discrepancies found
 
