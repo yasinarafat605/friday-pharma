@@ -192,8 +192,34 @@ describe('P4 Authentication & Tenancy Client Logic', () => {
   });
 
   describe('Configuration Detection', () => {
-    it('isSupabaseConfigured returns a boolean', () => {
-      expect(typeof isSupabaseConfigured()).toBe('boolean');
+    // R19: এই পরীক্ষাটি আগে কেবল ফেরত মানের *ধরন* দেখত (`typeof ... === 'boolean'`),
+    // যা `!!(...)` কখনোই ভাঙতে পারে না। এখন আচরণ দেখা হয়: ক্লাউড অংশ কেবল
+    // 'ok' অবস্থাতেই খোলে — 'absent' আর 'invalid' দুটোতেই বন্ধ।
+    it('is true only for a complete, well-formed pair', () => {
+      configure(GOOD_URL, GOOD_KEY);
+      expect(isSupabaseConfigured()).toBe(true);
+    });
+
+    it('is false when nothing is configured, and reports no error for it', () => {
+      configure(undefined, undefined);
+      expect(isSupabaseConfigured()).toBe(false);
+      expect(getSupabaseConfigError()).toBeNull();
+    });
+
+    it('is false for a broken deploy, and reports an error for it', () => {
+      // মন দিন: ভাঙা কনফিগে এটি true হয়ে গেলে অ্যাপ অর্ধেক-কাজ করা ক্লাউড
+      // দেখাত। তাই 'invalid'-ও false, কিন্তু নীরব নয়।
+      configure('not-a-url', GOOD_KEY);
+      expect(isSupabaseConfigured()).toBe(false);
+      expect(getSupabaseConfigError()).toContain(SUPABASE_URL_VAR);
+
+      configure(GOOD_URL, 'dummy-anon-key');
+      expect(isSupabaseConfigured()).toBe(false);
+      expect(getSupabaseConfigError()).toContain(SUPABASE_KEY_VAR);
+
+      configure(GOOD_URL, undefined);
+      expect(isSupabaseConfigured()).toBe(false);
+      expect(getSupabaseConfigError()).toContain(SUPABASE_KEY_VAR);
     });
   });
   describe('signUpOwner ordering (the bootstrap-owner invariant)', () => {
