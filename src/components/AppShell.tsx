@@ -11,6 +11,8 @@ import { L } from '@/lib/i18n/labels';
 import BrandMark from '@/components/BrandMark';
 
 import { useAuth } from '@/lib/supabase/AuthContext';
+import { roleBn } from '@/lib/roles';
+import { GATED_NAV, filterGatedNav } from '@/lib/nav-gate';
 
 const NAV = [
   { href: '/dashboard', label: L.nav.dashboard, icon: '🏠' },
@@ -30,16 +32,6 @@ const NAV = [
   { href: '/settings', label: L.nav.settings, icon: '⚙️' },
 ];
 
-function getRoleBadge(role: string | null): string {
-  switch (role) {
-    case 'owner': return 'মালিক';
-    case 'manager': return 'ম্যানেজার';
-    case 'cashier': return 'ক্যাশিয়ার';
-    case 'inventory': return 'স্টক কর্মী';
-    case 'accountant': return 'হিসাবরক্ষক';
-    default: return '';
-  }
-}
 
 // মোবাইলে নিচের তাড়াতাড়ি-বাটন (thumb-friendly)
 const BOTTOM = [
@@ -61,7 +53,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const {
     user, activePharmacyId, activeRole, memberships, selectPharmacy, signOut, configError,
+    permissions,
   } = useAuth();
+
+  // অনুমতি-নির্ভর লিংকগুলো এখানেই একবার ছেঁকে নেওয়া হয়।
+  const navItems = [...NAV, ...filterGatedNav(GATED_NAV, permissions)];
 
   const [ready, setReady] = useState(false);
   const [locked, setLocked] = useState(false);
@@ -155,7 +151,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             >
               {memberships.map((m) => (
                 <option key={m.pharmacy_id} value={m.pharmacy_id}>
-                  {m.pharmacies?.name || m.pharmacy_id.slice(0, 8)} ({getRoleBadge(m.role)})
+                  {m.pharmacies?.name || m.pharmacy_id.slice(0, 8)} ({roleBn(m.role)})
                 </option>
               ))}
             </select>
@@ -163,7 +159,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
           {activeRole && (
             <span className="ml-1 rounded bg-brand/10 px-2 py-0.5 text-xs font-semibold text-brand">
-              {getRoleBadge(activeRole)}
+              {roleBn(activeRole)}
             </span>
           )}
         </div>
@@ -178,7 +174,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       <div className="flex flex-1">
         <nav className={`${menuOpen ? 'block' : 'hidden'} w-full shrink-0 border-r border-gray-100 bg-white p-3 md:block md:w-60`}>
           <ul className="space-y-1">
-            {NAV.map((item) => {
+            {navItems.map((item) => {
               const active = pathname === normalizePath(item.href);
               return (
                 <li key={item.href}>

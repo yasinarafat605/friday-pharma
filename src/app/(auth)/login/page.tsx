@@ -15,21 +15,11 @@ import {
   signIn, signUpOwner, previewInvite, redeemInvite,
 } from '@/lib/supabase/auth';
 import type { InvitePreview } from '@/types/db';
+import { roleBn } from '@/lib/roles';
 
 type CloudTab = 'signin' | 'signup' | 'invite';
 type PinMode = 'loading' | 'setup' | 'enter' | 'reset';
 
-// ভূমিকার বাংলা নাম — আমন্ত্রণে কী দায়িত্ব দেওয়া হচ্ছে তা যোগ দেওয়ার আগেই বোঝা দরকার।
-const ROLE_BN: Record<string, string> = {
-  owner: 'মালিক',
-  manager: 'ম্যানেজার',
-  cashier: 'ক্যাশিয়ার',
-  inventory: 'স্টক কর্মী',
-  accountant: 'হিসাবরক্ষক',
-};
-function roleBn(role: string): string {
-  return ROLE_BN[role] ?? role;
-}
 
 export default function LoginPage() {
   const router = useRouter();

@@ -11,7 +11,8 @@ import { verifyStockIntegrity, type IntegrityReport } from '@/lib/stock/movement
 import { toBanglaDigits } from '@/lib/money';
 import { L } from '@/lib/i18n/labels';
 import { useAuth } from '@/lib/supabase/AuthContext';
-import type { AppSettings, ExpenseCategory, MemberRole } from '@/types/db';
+import { roleBn } from '@/lib/roles';
+import type { AppSettings, ExpenseCategory } from '@/types/db';
 
 export default function SettingsPage() {
   const [s, setS] = useState<AppSettings | null>(null);
@@ -98,14 +99,6 @@ export default function SettingsPage() {
   );
 }
 
-const ROLE_BN: Record<MemberRole, string> = {
-  owner: 'মালিক',
-  manager: 'ম্যানেজার',
-  cashier: 'ক্যাশিয়ার',
-  inventory: 'স্টক কর্মী',
-  accountant: 'হিসাবরক্ষক',
-};
-
 /**
  * দোকান ও সদস্যপদ।
  *
@@ -161,7 +154,7 @@ function ShopMembership() {
                     {name}
                     {isActive && <span className="ml-2 badge badge-normal">চালু</span>}
                   </p>
-                  <p className="text-xs text-gray-500">দায়িত্ব: {ROLE_BN[m.role] ?? m.role}</p>
+                  <p className="text-xs text-gray-500">দায়িত্ব: {roleBn(m.role)}</p>
                 </div>
 
                 {confirmId === m.pharmacy_id ? (
