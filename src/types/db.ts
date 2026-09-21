@@ -352,6 +352,28 @@ export interface Invite {
   used_at?: string | null;
 }
 
+/** সদস্য-ব্যবস্থাপনার পর্দায় দেখানো একটি সারি (memberships থেকে)। */
+export interface ShopMember {
+  user_id: string;
+  pharmacy_id: string;
+  role: MemberRole;
+  is_default: boolean;
+  full_name?: string | null;
+  phone?: string | null;
+  joined_at: string;
+}
+
+/** invites টেবিলের একটি সারি, মালিকের পর্দায় দেখানোর জন্য। */
+export interface ShopInvite {
+  code: string;
+  pharmacy_id: string;
+  role: MemberRole;
+  expires_at: string;
+  used_by?: string | null;
+  used_at?: string | null;
+  created_at: string;
+}
+
 export interface InvitePreview {
   pharmacy_id: string;
   pharmacy_name: string;

@@ -7,6 +7,7 @@ import {
   fetchUserMemberships, signOutUser, switchActivePharmacy, leavePharmacy,
   resolveActivePharmacyId,
 } from './auth';
+import { fetchRolePermissions } from './members';
 import type { MemberRole, Membership } from '@/types/db';
 
 interface AuthContextType {
@@ -19,6 +20,13 @@ interface AuthContextType {
   activePharmacyId: string | null;
   activePharmacyName: string;
   activeRole: MemberRole | null;
+  /**
+   * চালু ভূমিকার অনুমতিগুলো, role_permissions টেবিল থেকেই পড়া — "মালিক মানেই
+   * সব" ধরে নেওয়া হয় না, যাতে seed বদলালে UI নিজেই মিলে যায়।
+   */
+  permissions: string[];
+  /** অনুমতি আছে কিনা। না জানা থাকলে false — সন্দেহে আড়াল করাই নিরাপদ। */
+  can: (permission: string) => boolean;
   memberships: Membership[];
   selectPharmacy: (pharmacyId: string) => void;
   refreshMemberships: () => Promise<void>;
@@ -36,6 +44,8 @@ const AuthContext = createContext<AuthContextType>({
   activePharmacyId: null,
   activePharmacyName: '',
   activeRole: null,
+  permissions: [],
+  can: () => false,
   memberships: [],
   selectPharmacy: () => {},
   refreshMemberships: async () => {},
@@ -48,6 +58,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [memberships, setMemberships] = useState<Membership[]>([]);
+  const [permissions, setPermissions] = useState<string[]>([]);
   const [activePharmacyId, setActiveId] = useState<string | null>(null);
 
   const cfg = readSupabaseConfig();
@@ -151,6 +162,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const activeRole = currentMembership?.role ?? null;
   const activePharmacyName = currentMembership?.pharmacies?.name ?? '';
 
+  /**
+   * চালু ভূমিকার অনুমতি টেবিল থেকে পড়া হয়, হাতে লেখা ধারণা থেকে নয়।
+   * পড়তে না পারলে তালিকা ফাঁকা থাকে — অর্থাৎ সব আড়াল, কারণ সন্দেহে
+   * দেখিয়ে ফেলার চেয়ে না দেখানোই নিরাপদ (fail closed)।
+   */
+  useEffect(() => {
+    let alive = true;
+    if (!configured || !user || !activeRole) {
+      setPermissions([]);
+      return;
+    }
+    (async () => {
+      try {
+        const list = await fetchRolePermissions(activeRole);
+        if (alive) setPermissions(list);
+      } catch {
+        if (alive) setPermissions([]);
+      }
+    })();
+    return () => { alive = false; };
+  }, [configured, user, activeRole]);
+
+  const can = useCallback(
+    (permission: string) => permissions.includes(permission),
+    [permissions],
+  );
+
   return (
     <AuthContext.Provider
       value={{
@@ -159,6 +197,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         loading,
         isConfigured: configured,
         configError,
+        permissions,
+        can,
         activePharmacyId,
         activePharmacyName,
         activeRole,
